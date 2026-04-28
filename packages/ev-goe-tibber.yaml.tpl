@@ -170,22 +170,62 @@ template:
         unit_of_measurement: "kWh"
         icon: mdi:battery-charging
         state: >-
-          {% set hours = states('input_number.ev_cheap_hours') | float(6) %}
-          {% set amps = states('input_number.ev_current_normal') | float(10) %}
-          {% set voltage = 230 %}
-          {{ (hours * amps * voltage / 1000) | round(1) }}
+          {% set raw = state_attr('sensor.tibber_prices', 'today') %}
+          {% if raw is not none and raw | length >= 24 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% set current_hour = now().hour %}
+            {% set remaining_prices = prices[current_hour:] %}
+            {% set sorted_all = prices | sort %}
+            {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+            {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
+            {% set amps = states('input_number.ev_current_normal') | float(10) %}
+            {% set voltage = 230 %}
+            {{ (cheap_remaining | length * amps * voltage / 1000) | round(1) }}
+          {% else %}
+            {{ 0 }}
+          {% endif %}
 
       - name: "EV potential range today"
         unique_id: ev_potential_range_today
         unit_of_measurement: "km"
         icon: mdi:map-marker-distance
         state: >-
-          {% set hours = states('input_number.ev_cheap_hours') | float(6) %}
-          {% set amps = states('input_number.ev_current_normal') | float(10) %}
-          {% set voltage = 230 %}
-          {% set kwh = hours * amps * voltage / 1000 %}
-          {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
-          {{ (kwh / consumption * 100) | round(0) }}
+          {% set raw = state_attr('sensor.tibber_prices', 'today') %}
+          {% if raw is not none and raw | length >= 24 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% set current_hour = now().hour %}
+            {% set remaining_prices = prices[current_hour:] %}
+            {% set sorted_all = prices | sort %}
+            {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+            {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
+            {% set amps = states('input_number.ev_current_normal') | float(10) %}
+            {% set voltage = 230 %}
+            {% set kwh = cheap_remaining | length * amps * voltage / 1000 %}
+            {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
+            {{ (kwh / consumption * 100) | round(0) }}
+          {% else %}
+            {{ 0 }}
+          {% endif %}
+
+      - name: "EV cheap hours remaining"
+        unique_id: ev_cheap_hours_remaining
+        unit_of_measurement: "h"
+        icon: mdi:clock-fast
+        state: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'today') %}
+          {% if raw is not none and raw | length >= 24 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% set current_hour = now().hour %}
+            {% set remaining_prices = prices[current_hour:] %}
+            {% set sorted_all = prices | sort %}
+            {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+            {{ remaining_prices | select('le', threshold) | list | length }}
+          {% else %}
+            {{ 0 }}
+          {% endif %}
 
   # --- Voltage monitoring ---
   - sensor:
