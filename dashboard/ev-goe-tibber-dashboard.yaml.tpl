@@ -74,10 +74,12 @@ views:
         entities:
           - entity: input_number.ev_cheap_hours
             name: Cheap hours per day
+          - entity: sensor.ev_next_cheap_hour
+            name: Next cheap hour
+          - entity: sensor.ev_cheap_hours_remaining
+            name: Cheap hours remaining today
           - entity: sensor.ev_expected_price_today
             name: Expected avg. price today
-          - entity: sensor.ev_cheap_hours_remaining
-            name: Cheap hours remaining
           - entity: sensor.ev_potential_energy_today
             name: Potential energy remaining
           - entity: sensor.ev_potential_range_today
@@ -89,6 +91,26 @@ views:
             name: Current electricity price
           - entity: sensor.ev_voltage_status
             name: Voltage status
+
+      # --- Tomorrow preview ---
+      - type: entities
+        title: "📅 Tomorrow"
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ev_tomorrow_cheapest_hours
+            name: Cheapest hours
+          - entity: sensor.ev_tomorrow_expected_price
+            name: Expected avg. price
+
+      # --- Cost forecast ---
+      - type: entities
+        title: "📈 Forecast"
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ev_monthly_cost_forecast
+            name: Projected monthly cost
+          - entity: input_number.ev_monthly_budget
+            name: Monthly budget limit
 
       # --- Quick action buttons ---
       - type: horizontal-stack

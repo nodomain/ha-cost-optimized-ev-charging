@@ -227,6 +227,96 @@ template:
             {{ 0 }}
           {% endif %}
 
+  # --- Tomorrow preview (available after ~13:00 when Tibber publishes next day) ---
+  - sensor:
+      - name: "EV tomorrow cheapest hours"
+        unique_id: ev_tomorrow_cheapest_hours
+        icon: mdi:calendar-arrow-right
+        state: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'tomorrow') %}
+          {% if raw is not none and raw | length >= 24 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% set sorted = prices | sort %}
+            {% set threshold = sorted[hours - 1] %}
+            {% set ns = namespace(indices=[]) %}
+            {% for p in prices %}
+              {% if p <= threshold and ns.indices | length < hours %}
+                {% set ns.indices = ns.indices + [loop.index0] %}
+              {% endif %}
+            {% endfor %}
+            {{ ns.indices | map('string') | join(', ') }}h
+          {% else %}
+            unavailable
+          {% endif %}
+        availability: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'tomorrow') %}
+          {{ raw is not none and raw | length >= 24 }}
+
+      - name: "EV tomorrow expected price"
+        unique_id: ev_tomorrow_expected_price
+        unit_of_measurement: "EUR/kWh"
+        icon: mdi:calendar-clock
+        state: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'tomorrow') %}
+          {% if raw is not none and raw | length >= 24 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% set cheap = (prices | sort)[:hours] %}
+            {{ (cheap | sum / cheap | length) | round(3) }}
+          {% else %}
+            {{ 0 }}
+          {% endif %}
+        availability: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'tomorrow') %}
+          {{ raw is not none and raw | length >= 24 }}
+
+  # --- Next cheap hour ---
+  - sensor:
+      - name: "EV next cheap hour"
+        unique_id: ev_next_cheap_hour
+        icon: mdi:clock-start
+        state: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'today') %}
+          {% if raw is not none and raw | length >= 24 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% set current_hour = now().hour %}
+            {% set sorted_all = prices | sort %}
+            {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+            {% set ns = namespace(found=-1) %}
+            {% for h in range(current_hour, 24) %}
+              {% if prices[h] <= threshold and ns.found == -1 %}
+                {% set ns.found = h %}
+              {% endif %}
+            {% endfor %}
+            {% if ns.found == current_hour %}
+              now
+            {% elif ns.found >= 0 %}
+              in {{ ns.found - current_hour }}h ({{ '%02d' | format(ns.found) }}:00)
+            {% else %}
+              tomorrow
+            {% endif %}
+          {% else %}
+            unknown
+          {% endif %}
+
+  # --- Cost forecast ---
+  - sensor:
+      - name: "EV monthly cost forecast"
+        unique_id: ev_monthly_cost_forecast
+        unit_of_measurement: "EUR"
+        icon: mdi:chart-timeline-variant
+        state: >-
+          {% set cost_so_far = states('sensor.ev_charging_cost_monthly') | float(0) %}
+          {% set day_of_month = now().day %}
+          {% if day_of_month > 1 and cost_so_far > 0 %}
+            {% set days_in_month = ((now().replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)).day %}
+            {{ (cost_so_far / day_of_month * days_in_month) | round(2) }}
+          {% else %}
+            {{ cost_so_far | round(2) }}
+          {% endif %}
+
   # --- Voltage monitoring ---
   - sensor:
       - name: "EV house voltage L1"
@@ -378,8 +468,13 @@ automation:
           prices_today: >-
             {{ state_attr('sensor.tibber_prices', 'today')
                | map(attribute='total') | list }}
+          prices_tomorrow: >-
+            {% set raw = state_attr('sensor.tibber_prices', 'tomorrow') %}
+            {{ raw | map(attribute='total') | list if raw is not none and raw | length >= 24 else [] }}
+          combined_prices: >-
+            {{ prices_today + prices_tomorrow if prices_tomorrow | length >= 24 else prices_today }}
           sorted_prices: >-
-            {{ prices_today | sort if prices_today | length > 0 else [] }}
+            {{ combined_prices | sort if combined_prices | length > 0 else [] }}
           price_threshold: >-
             {{ sorted_prices[cheap_hours - 1]
                if sorted_prices | length >= cheap_hours
@@ -646,6 +741,14 @@ automation:
         entity_id: binary_sensor.goe_${GOE_SERIAL}_car_0
         to: "off"
     actions:
+      - variables:
+          session_kwh: "{{ states('sensor.goe_${GOE_SERIAL}_wh') | float(0) | round(2) }}"
+          session_cost: >-
+            {% set kwh = states('sensor.goe_${GOE_SERIAL}_wh') | float(0) %}
+            {% set avg = states('sensor.ev_average_price_per_kwh_monthly') | float(0.20) %}
+            {{ (kwh * avg) | round(2) }}
+          monthly_total_kwh: "{{ states('sensor.ev_energy_monthly') | float(0) | round(1) }}"
+          monthly_total_cost: "{{ states('sensor.ev_charging_cost_monthly') | float(0) | round(2) }}"
       - action: select.select_option
         target:
           entity_id: select.goe_${GOE_SERIAL}_frc
@@ -654,13 +757,21 @@ automation:
       - action: input_boolean.turn_off
         target:
           entity_id: input_boolean.ev_force_charge
+      # Session log notification with full summary
       - action: notify.mobile_app_${IPHONE_DEVICE}
         data:
-          title: "🔌 EV disconnected"
+          title: "🔌 EV disconnected — session complete"
           message: >-
-            Car unplugged. Session energy: {{ states('sensor.goe_${GOE_SERIAL}_wh') }} kWh.
-            Monthly total: {{ states('sensor.ev_energy_monthly') | float(0) | round(1) }} kWh
-            ({{ states('sensor.ev_charging_cost_monthly') | float(0) | round(2) }} EUR).
+            Session: {{ session_kwh }} kWh (~{{ session_cost }} EUR).
+            Monthly: {{ monthly_total_kwh }} kWh / {{ monthly_total_cost }} EUR.
+      # Log to HA logbook via event
+      - event: ev_charging_session_complete
+        event_data:
+          energy_kwh: "{{ session_kwh }}"
+          estimated_cost_eur: "{{ session_cost }}"
+          monthly_energy_kwh: "{{ monthly_total_kwh }}"
+          monthly_cost_eur: "{{ monthly_total_cost }}"
+          timestamp: "{{ now().isoformat() }}"
     mode: single
 
   # -------------------------------------------------------------------------
