@@ -1,0 +1,13 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary scripts
+scripts/
+
+# Personal config (contains entity IDs with address/serial)
+.env
