@@ -180,8 +180,8 @@ views:
             name: Grid voltage L1
           - entity: sensor.current_l1_${TIBBER_HOME}
             name: Grid current L1
-          - entity: sensor.average_power_${TIBBER_HOME}
-            name: House average power
+          - entity: sensor.power_${TIBBER_HOME}
+            name: House power (realtime)
           - entity: sensor.accumulated_cost_${TIBBER_HOME}
             name: House cost today
 
@@ -223,7 +223,7 @@ views:
         entities:
           - entity: sensor.goe_${GOE_SERIAL}_nrg_11
             name: Charging
-          - entity: sensor.average_power_${TIBBER_HOME}
+          - entity: sensor.power_${TIBBER_HOME}
             name: House
 
       # --- Cost summary ---
