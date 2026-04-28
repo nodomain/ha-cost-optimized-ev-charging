@@ -33,8 +33,8 @@ views:
             name: Vehicle status
           - entity: select.goe_${GOE_SERIAL}_frc
             name: Charge mode
-          - entity: number.goe_${GOE_SERIAL}_amp
-            name: Charging current
+          - entity: sensor.goe_${GOE_SERIAL}_nrg_4
+            name: Charging current (actual)
           - entity: sensor.goe_${GOE_SERIAL}_nrg_11
             name: Charging power
           - entity: sensor.goe_${GOE_SERIAL}_wh
