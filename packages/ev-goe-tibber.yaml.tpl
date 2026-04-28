@@ -326,9 +326,13 @@ template:
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {% set voltage = 230 %}
           {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
+          {% set budget = states('input_number.ev_monthly_budget') | float(50) %}
+          {% set avg_price = states('sensor.ev_expected_price_today') | float(0.20) %}
           {% set days_in_month = ((now().replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)).day %}
           {% set daily_kwh = hours * amps * voltage / 1000 %}
-          {% set monthly_kwh = daily_kwh * days_in_month %}
+          {% set monthly_kwh_unlimited = daily_kwh * days_in_month %}
+          {% set budget_limited_kwh = budget / avg_price if avg_price > 0 else monthly_kwh_unlimited %}
+          {% set monthly_kwh = [monthly_kwh_unlimited, budget_limited_kwh] | min %}
           {{ (monthly_kwh / consumption * 100) | round(0) }}
 
   # --- Voltage monitoring ---
