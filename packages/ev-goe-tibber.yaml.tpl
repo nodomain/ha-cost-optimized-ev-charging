@@ -119,7 +119,7 @@ template:
         state: >-
           {% set power_w = states('sensor.goe_${GOE_SERIAL}_nrg_11') | float(0) %}
           {% set price = states('sensor.electricity_price_${TIBBER_HOME}') | float(0) %}
-          {{ (power_w / 1000 * price) | round(4) }}
+          {{ (power_w / 1000 * price) | round(3) }}
         availability: >-
           {{ states('sensor.goe_${GOE_SERIAL}_nrg_11') | is_number
              and states('sensor.electricity_price_${TIBBER_HOME}') | is_number }}
@@ -131,21 +131,28 @@ template:
         state: >-
           {% set cost = states('sensor.ev_charging_cost_monthly') | float(0) %}
           {% set energy = states('sensor.ev_energy_monthly') | float(0) %}
-          {{ (cost / energy) | round(4) if energy > 0 else 0 }}
+          {{ (cost / energy) | round(3) if energy > 0 else 0 }}
 
       - name: "EV expected price today"
         unique_id: ev_expected_price_today
         unit_of_measurement: "EUR/kWh"
         icon: mdi:crystal-ball
         state: >-
-          {% set prices = state_attr('sensor.tibber_prices', 'today') | map(attribute='total') | list %}
-          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% if prices | length >= hours %}
-            {% set cheap = (prices | sort)[:hours] %}
-            {{ (cheap | sum / cheap | length) | round(4) }}
+          {% set raw = state_attr('sensor.tibber_prices', 'today') %}
+          {% if raw is not none and raw | length > 0 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% if prices | length >= hours %}
+              {% set cheap = (prices | sort)[:hours] %}
+              {{ (cheap | sum / cheap | length) | round(3) }}
+            {% else %}
+              {{ 0 }}
+            {% endif %}
           {% else %}
             {{ 0 }}
           {% endif %}
+        availability: >-
+          {{ state_attr('sensor.tibber_prices', 'today') is not none }}
 
   # --- Voltage monitoring ---
   - sensor:
@@ -342,8 +349,8 @@ automation:
                 data:
                   title: "🔌 EV charging started"
                   message: >-
-                    Price: {{ current_price }} EUR/kWh
-                    (threshold: {{ price_threshold }}).
+                    Price: {{ current_price | round(3) }} EUR/kWh
+                    (threshold: {{ price_threshold | round(3) }}).
                     Budget: {{ monthly_ev_cost | round(2) }}/{{ monthly_budget }} EUR
                     ({{ budget_remaining }} EUR left).
                   data:
@@ -372,8 +379,8 @@ automation:
                     {% elif not has_price_data %}❓ EV stopped — no price data
                     {% else %}⏸️ EV paused — price too high{% endif %}
                   message: >-
-                    Price: {{ current_price }} EUR/kWh
-                    (threshold: {{ price_threshold }}).
+                    Price: {{ current_price | round(3) }} EUR/kWh
+                    (threshold: {{ price_threshold | round(3) }}).
                     Budget: {{ monthly_ev_cost | round(2) }}/{{ monthly_budget }} EUR.
                     Energy this month: {{ states('sensor.ev_energy_monthly') | float(0) | round(1) }} kWh.
                   data:
@@ -410,7 +417,7 @@ automation:
           message: >-
             Manual override active. Charging at
             {{ states('input_number.ev_current_normal') }} A.
-            Price: {{ states('sensor.electricity_price_${TIBBER_HOME}') }} EUR/kWh.
+            Price: {{ states('sensor.electricity_price_${TIBBER_HOME}') | float(0) | round(3) }} EUR/kWh.
     mode: single
 
   - id: ev_force_charge_off
@@ -554,7 +561,7 @@ automation:
         data:
           title: "🔌 EV connected"
           message: >-
-            Car plugged in. Price: {{ states('sensor.electricity_price_${TIBBER_HOME}') }} EUR/kWh.
+            Car plugged in. Price: {{ states('sensor.electricity_price_${TIBBER_HOME}') | float(0) | round(3) }} EUR/kWh.
             Smart charging: {{ states('input_boolean.ev_smart_charging_enabled') }}.
             Monthly EV cost: {{ states('sensor.ev_charging_cost_monthly') | float(0) | round(2) }} EUR.
     mode: single
