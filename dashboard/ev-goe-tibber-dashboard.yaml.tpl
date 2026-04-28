@@ -109,6 +109,8 @@ views:
         entities:
           - entity: sensor.ev_monthly_cost_forecast
             name: Projected monthly cost
+          - entity: sensor.ev_monthly_range_forecast
+            name: Projected monthly range
           - entity: input_number.ev_monthly_budget
             name: Monthly budget limit
 

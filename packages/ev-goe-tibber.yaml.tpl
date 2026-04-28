@@ -317,6 +317,20 @@ template:
             {{ cost_so_far | round(2) }}
           {% endif %}
 
+      - name: "EV monthly range forecast"
+        unique_id: ev_monthly_range_forecast
+        unit_of_measurement: "km"
+        icon: mdi:road-variant
+        state: >-
+          {% set hours = states('input_number.ev_cheap_hours') | float(6) %}
+          {% set amps = states('input_number.ev_current_normal') | float(10) %}
+          {% set voltage = 230 %}
+          {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
+          {% set days_in_month = ((now().replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)).day %}
+          {% set daily_kwh = hours * amps * voltage / 1000 %}
+          {% set monthly_kwh = daily_kwh * days_in_month %}
+          {{ (monthly_kwh / consumption * 100) | round(0) }}
+
   # --- Voltage monitoring ---
   - sensor:
       - name: "EV house voltage L1"
