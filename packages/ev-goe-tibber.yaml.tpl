@@ -74,6 +74,17 @@ input_number:
     mode: box
     initial: 10
 
+  # --- Vehicle parameters ---
+  ev_consumption_per_100km:
+    name: "EV consumption per 100 km"
+    min: 10
+    max: 40
+    step: 0.5
+    unit_of_measurement: "kWh/100km"
+    icon: mdi:car-electric-outline
+    mode: box
+    initial: 22
+
   # --- Voltage protection thresholds ---
   ev_voltage_warn:
     name: "EV voltage warning threshold"
@@ -153,6 +164,28 @@ template:
           {% endif %}
         availability: >-
           {{ state_attr('sensor.tibber_prices', 'today') is not none }}
+
+      - name: "EV potential energy today"
+        unique_id: ev_potential_energy_today
+        unit_of_measurement: "kWh"
+        icon: mdi:battery-charging
+        state: >-
+          {% set hours = states('input_number.ev_cheap_hours') | float(6) %}
+          {% set amps = states('input_number.ev_current_normal') | float(10) %}
+          {% set voltage = 230 %}
+          {{ (hours * amps * voltage / 1000) | round(1) }}
+
+      - name: "EV potential range today"
+        unique_id: ev_potential_range_today
+        unit_of_measurement: "km"
+        icon: mdi:map-marker-distance
+        state: >-
+          {% set hours = states('input_number.ev_cheap_hours') | float(6) %}
+          {% set amps = states('input_number.ev_current_normal') | float(10) %}
+          {% set voltage = 230 %}
+          {% set kwh = hours * amps * voltage / 1000 %}
+          {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
+          {{ (kwh / consumption * 100) | round(0) }}
 
   # --- Voltage monitoring ---
   - sensor:

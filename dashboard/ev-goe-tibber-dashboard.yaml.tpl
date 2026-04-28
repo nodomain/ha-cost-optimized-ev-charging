@@ -76,6 +76,13 @@ views:
             name: Cheap hours per day
           - entity: sensor.ev_expected_price_today
             name: Expected avg. price today
+          - entity: sensor.ev_potential_energy_today
+            name: Potential energy today
+          - entity: sensor.ev_potential_range_today
+            name: Potential range today
+          - entity: input_number.ev_consumption_per_100km
+            name: Vehicle consumption
+          - type: divider
           - entity: sensor.electricity_price_${TIBBER_HOME}
             name: Current electricity price
           - entity: sensor.ev_voltage_status
