@@ -31,8 +31,9 @@ card:
     {% set cheap_remaining = states('sensor.ev_cheap_hours_remaining') | int(0) %}
     {% set pot_kwh = states('sensor.ev_potential_energy_today') | float(0) %}
     {% set pot_km = states('sensor.ev_potential_range_today') | int(0) %}
-    {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
-    {% set session_km = (session_kwh / consumption * 100) | round(0) if consumption > 0 else 0 %}
+    {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | int(0) %}
+    {% set range_km = states('sensor.ix1_xdrive30_range_ev_remaining_range') | int(0) %}
+    {% set target_soc = states('input_number.ev_target_soc') | int(80) %}
     {# --- Icon --- #}
     {% if voltage_status in ['critical', 'reduce'] %}⚠️
     {% elif force == 'on' %}⚡
@@ -41,9 +42,9 @@ card:
     {% else %}🔌
     {% endif %}
     {# --- Main info --- #}
-    {% if power > 100 %}**{{ (power / 1000) | round(1) }} kW** · {{ '{:.1f}'.format(price * 100) }} ct · {{ session_kwh | round(1) }} kWh · +{{ session_km }} km · noch {{ cheap_remaining }}h · {{ pot_kwh | round(1) }} kWh / {{ pot_km }} km mögl.
-    {% elif session_kwh > 0.1 %}{{ session_kwh | round(1) }} kWh (+{{ session_km }} km) · {{ '{:.1f}'.format(price * 100) }} ct · {% if next == 'now' %}▶ jetzt{% elif next == 'tomorrow' %}↗ morgen{% else %}↗ {{ next }}{% endif %} · {{ pot_kwh | round(1) }} kWh / {{ pot_km }} km mögl.
-    {% elif budget_used >= budget_max %}Budget · {{ budget_used | round(0) }}/{{ budget_max | round(0) }} € ⛔
-    {% elif voltage_status in ['critical', 'reduce'] %}{{ states('sensor.ev_house_voltage_l1') | round(0) }} V · {{ '{:.1f}'.format(price * 100) }} ct
-    {% else %}{{ '{:.1f}'.format(price * 100) }} ct · {% if next == 'now' %}▶ jetzt{% elif next == 'tomorrow' %}↗ morgen{% else %}↗ {{ next }}{% endif %} · {{ pot_kwh | round(1) }} kWh / {{ pot_km }} km mögl.
+    {% if power > 100 %}**{{ (power / 1000) | round(1) }} kW** · {{ soc }}%→{{ target_soc }}% · {{ range_km }} km · {{ '{:.1f}'.format(price * 100) }} ct · +{{ session_kwh | round(1) }} kWh · noch {{ cheap_remaining }}h
+    {% elif soc >= target_soc %}🔋 {{ soc }}% · {{ range_km }} km · Ziel erreicht ✓
+    {% elif session_kwh > 0.1 %}{{ soc }}% · {{ range_km }} km · +{{ session_kwh | round(1) }} kWh · {% if next == 'now' %}▶ jetzt{% elif next == 'tomorrow' %}↗ morgen{% else %}↗ {{ next }}{% endif %}
+    {% elif budget_used >= budget_max %}{{ soc }}% · Budget {{ budget_used | round(0) }}/{{ budget_max | round(0) }} € ⛔
+    {% else %}{{ soc }}% · {{ range_km }} km · {{ '{:.1f}'.format(price * 100) }} ct · {% if next == 'now' %}▶ jetzt{% elif next == 'tomorrow' %}↗ morgen{% else %}↗ {{ next }}{% endif %} · {{ pot_km }} km mögl.
     {% endif %}

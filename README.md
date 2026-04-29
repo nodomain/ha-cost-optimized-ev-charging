@@ -1,12 +1,14 @@
 # ha-cost-optimized-ev-charging
 
-Smart EV charging automation for Home Assistant using Tibber dynamic pricing and go-eCharger API v2.
+Smart EV charging automation for Home Assistant using Tibber dynamic pricing, go-eCharger API v2, and BMW CarData integration.
 
 ## Features
 
-- **Smart scheduling** — charges only during the X cheapest hours of the day (Tibber hourly prices)
+- **Smart scheduling** — charges only during the X cheapest hours of the day (Tibber 15-min prices)
+- **SoC-based stop** — stops charging when battery reaches target SoC (default 80%)
 - **Overnight charging** — combines today + tomorrow prices for optimal scheduling across midnight
 - **Monthly EV cost budget** — tracks EV-specific cost and stops when budget is reached
+- **BMW CarData integration** — live SoC, range, charging state via MQTT
 - **Tomorrow preview** — shows tomorrow's cheapest hours and expected price (available after ~13:00)
 - **Next cheap hour** — tells you when the next charging window starts
 - **Cost forecast** — projects current spending to end of month
@@ -15,13 +17,14 @@ Smart EV charging automation for Home Assistant using Tibber dynamic pricing and
 - **Force charge override** — manual dashboard toggle to bypass scheduling
 - **Push notifications** — iPhone alerts on charge start/stop, voltage events, car connect/disconnect
 - **Range estimation** — shows potential kWh and km based on configured cheap hours and current
+- **Fallback pricing** — if price cache is unavailable, uses current price vs daily average
 
 ## Requirements
 
 - [ha-goecharger-api2](https://github.com/marq24/ha-goecharger-api2) custom component (HACS)
-- [Tibber](https://www.home-assistant.io/integrations/tibber/) integration with Pulse
+- [Tibber](https://www.home-assistant.io/integrations/tibber/) official integration with Pulse
+- [BMW CarData](https://github.com/kvanbiesen/bmw-cardata-ha) custom component (HACS) — for SoC
 - iOS Companion App for push notifications
-- REST sensor for `sensor.tibber_prices` (hourly price list with `today` + `tomorrow` attributes)
 
 ## Quick Start
 
@@ -40,7 +43,7 @@ cp .env.example .env
 # 4. Add to configuration.yaml:
 #    homeassistant:
 #      packages:
-#        ev_goe_tibber: !include ev-goe-tibber.yaml
+#        ev_goe_tibber: !include ha-cost-optimized-ev-charging/ev-goe-tibber.yaml
 
 # 5. Restart Home Assistant
 
@@ -53,6 +56,7 @@ All parameters are adjustable from the HA dashboard at runtime:
 
 | Parameter | Default | Description |
 |---|---|---|
+| Target SoC | 80% | Stop charging when battery reaches this level |
 | Monthly budget | 50 EUR | Max EV charging spend per month |
 | Cheap hours/day | 6 | Number of cheapest hours to charge |
 | Normal current | 10 A | Standard charging current (Schuko) |
@@ -64,17 +68,24 @@ All parameters are adjustable from the HA dashboard at runtime:
 
 ## How It Works
 
+### Price Data
+
+Prices come from the **official Tibber integration** via `tibber.get_prices` service (15-minute resolution). A trigger-based template sensor (`sensor.ev_price_cache`) fetches and caches hourly prices every 15 minutes. No REST sensor needed.
+
+**Fallback:** If the price cache is unavailable (API timeout), the scheduler compares the current live price against the daily average from `sensor.electricity_price_*` attributes.
+
 ### Scheduling Logic
 
 ```
 Every minute (+ on car connect, + on price change):
-  1. Fetch today's 24 hourly prices (+ tomorrow's if available)
+  1. Read cached hourly prices (today + tomorrow if available)
   2. Sort combined prices, find threshold for X cheapest hours
   3. Check: current hour price ≤ threshold?
-  4. Check: monthly EV cost < budget?
-  5. Check: voltage OK? Price data available?
-  6. All true → frc=2 (force charge) + iPhone notification
-  7. Any false → frc=1 (force stop) + notification (on transition only)
+  4. Check: SoC < target? (BMW CarData)
+  5. Check: monthly EV cost < budget?
+  6. Check: voltage OK?
+  7. All true → frc=2 (force charge) + iPhone notification
+  8. Any false → frc=1 (force stop) + notification (on transition only)
 ```
 
 ### Overnight Charging
@@ -85,8 +96,8 @@ the car will charge through the night without interruption.
 
 ### Force Charge Control
 
-- `frc=2` → force start (cheap hour + budget OK)
-- `frc=1` → force stop (price too high / budget exceeded / voltage low)
+- `frc=2` → force start (cheap hour + budget OK + SoC below target)
+- `frc=1` → force stop (price too high / budget exceeded / voltage low / SoC reached)
 - `frc=0` → neutral (only when car disconnected)
 
 **Important:** `frc=0` does NOT stop charging — it lets the wallbox decide on its own.
@@ -102,7 +113,8 @@ The automation always uses `frc=1` to actively prevent charging during expensive
 ├── packages/
 │   └── ev-goe-tibber.yaml.tpl           # HA package template
 └── dashboard/
-    └── ev-goe-tibber-dashboard.yaml.tpl  # Dashboard template (2 views)
+    ├── ev-goe-tibber-dashboard.yaml.tpl  # Dashboard template (2 views)
+    └── ev-widget-card.yaml.tpl           # Compact widget for wall displays
 ```
 
 ## Environment Variables (.env)
@@ -116,6 +128,12 @@ The automation always uses `frc=1` to actively prevent charging during expensive
 
 ## Sensors Created
 
+### Price Cache
+
+| Entity | Description |
+|---|---|
+| `sensor.ev_price_cache` | Trigger-based sensor caching hourly prices from official Tibber integration |
+
 ### Scheduling & Planning
 
 | Entity | Description |
@@ -124,10 +142,11 @@ The automation always uses `frc=1` to actively prevent charging during expensive
 | `sensor.ev_cheap_hours_remaining` | How many cheap hours are left today |
 | `sensor.ev_potential_energy_today` | Remaining kWh possible today |
 | `sensor.ev_potential_range_today` | Remaining km possible today |
-| `sensor.ev_next_cheap_hour` | "now" / "in Xh (HH:00)" / "tomorrow" |
-| `sensor.ev_tomorrow_cheapest_hours` | Tomorrow's cheap hour indices (e.g. "10, 11, 12, 13, 14, 15h") |
+| `sensor.ev_next_cheap_hour` | "now" / "HH:00" / "tomorrow" |
+| `sensor.ev_tomorrow_cheapest_hours` | Tomorrow's cheap hour indices |
 | `sensor.ev_tomorrow_expected_price` | Avg price of tomorrow's X cheapest hours |
 | `sensor.ev_monthly_cost_forecast` | Projected monthly cost based on current pace |
+| `sensor.ev_monthly_range_forecast` | Projected monthly range (budget-limited) |
 
 ### Cost & Energy Tracking
 
@@ -157,7 +176,7 @@ The automation always uses `frc=1` to actively prevent charging during expensive
 
 | ID | Trigger | Action |
 |---|---|---|
-| `ev_smart_charge_scheduler` | Every min + car connect + price change | Start/stop based on price + budget (48h window) |
+| `ev_smart_charge_scheduler` | Every min + car connect + price change | Start/stop based on price + budget + SoC |
 | `ev_force_charge_on/off` | Dashboard toggle | Manual override |
 | `ev_voltage_*` | Voltage thresholds | Warn → reduce → stop → restore |
 | `ev_car_connected` | Car plugged in | Notify with price + budget info |
@@ -171,20 +190,32 @@ Two views optimized for readability:
 **View 1: Charging** (daily use)
 - Tibber price graph
 - Charger status (car, mode, current, power, session)
+- BMW iX1 status (SoC, range, charging power, state, time to full, mileage)
+- SoC gauge
 - Budget gauge + monthly cost/energy
-- Scheduling (cheap hours, next cheap hour, potential energy/range)
+- Scheduling (target SoC, cheap hours, next cheap hour, potential energy/range)
 - Tomorrow preview
 - Cost forecast
-- Quick action buttons
+- Quick action buttons (Smart Charging / Force Charge)
 
 **View 2: Settings** (configure once)
 - Voltage protection thresholds
 - Charging parameters
-- Detailed go-eCharger entities
 - Detailed Tibber/Grid entities
 - Voltage gauges + history
+- SoC history (48h)
 - Cost & energy summary (monthly/quarterly/yearly)
 - Statistics bar charts
+
+## Widget Card
+
+A compact single-line status bar for wall displays, only visible when car is plugged in:
+
+```
+🟢 2.1 kW · 59%→80% · 201 km · 14.5 ct · +3.4 kWh · noch 5h
+```
+
+Shows: status icon, power, SoC→target, range, price, session energy, remaining cheap hours.
 
 ## Voltage Protection
 
@@ -208,6 +239,14 @@ On each car disconnect, a session summary is logged:
 - Session energy (kWh) and estimated cost (EUR)
 - Monthly totals
 - HA event `ev_charging_session_complete` fired (visible in logbook)
+
+## Hardware
+
+- **Wallbox:** go-eCharger V4, 11 kW, single-phase (Schuko), local WebSocket
+- **Vehicle:** BMW iX1 xDrive30 (66.5 kWh battery)
+- **Energy provider:** Tibber with Pulse (hourly dynamic pricing, Germany)
+- **Smart meter:** Tibber Pulse (real-time voltage and consumption)
+- **Notifications:** iOS Companion App (iPhone)
 
 ## License
 

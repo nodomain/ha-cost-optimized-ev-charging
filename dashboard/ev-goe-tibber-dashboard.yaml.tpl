@@ -40,6 +40,39 @@ views:
           - entity: sensor.goe_${GOE_SERIAL}_wh
             name: Session energy
 
+      # --- Vehicle (BMW iX1) ---
+      - type: entities
+        title: "🚗 iX1 xDrive30"
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ix1_xdrive30_battery_hv_state_of_charge
+            name: Battery SoC
+          - entity: input_number.ev_target_soc
+            name: Target SoC
+          - entity: sensor.ix1_xdrive30_range_ev_remaining_range
+            name: Remaining range
+          - entity: sensor.ix1_xdrive30_battery_ev_charging_power
+            name: Charging power (BMW)
+          - entity: sensor.ix1_xdrive30_charging_ev_charging_state
+            name: Charging state
+          - entity: sensor.ix1_xdrive30_charging_ev_remaining_time_estimate
+            name: Time to full
+          - entity: sensor.ix1_xdrive30_vehicle_mileage
+            name: Mileage
+
+      # --- SoC gauge ---
+      - type: gauge
+        entity: sensor.ix1_xdrive30_battery_hv_state_of_charge
+        name: Battery
+        unit: "%"
+        min: 0
+        max: 100
+        needle: true
+        severity:
+          green: 60
+          yellow: 30
+          red: 0
+
       # --- Budget & cost ---
       - type: entities
         title: "💰 Budget"
@@ -74,6 +107,8 @@ views:
         entities:
           - entity: input_number.ev_cheap_hours
             name: Cheap hours per day
+          - entity: input_number.ev_target_soc
+            name: Charge target SoC
           - entity: sensor.ev_next_cheap_hour
             name: Next cheap hour
           - entity: sensor.ev_cheap_hours_remaining
@@ -227,6 +262,13 @@ views:
             name: Charging
           - entity: sensor.power_${TIBBER_HOME}
             name: House
+
+      - type: history-graph
+        title: "🔋 Battery SoC (48h)"
+        hours_to_show: 48
+        entities:
+          - entity: sensor.ix1_xdrive30_battery_hv_state_of_charge
+            name: SoC
 
       # --- Cost summary ---
       - type: entities
