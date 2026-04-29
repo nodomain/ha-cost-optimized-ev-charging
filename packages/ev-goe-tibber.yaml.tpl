@@ -293,7 +293,7 @@ template:
             {% if ns.found == current_hour %}
               now
             {% elif ns.found >= 0 %}
-              in {{ ns.found - current_hour }}h ({{ '%02d' | format(ns.found) }}:00)
+              {{ '%02d' | format(ns.found) }}:00
             {% else %}
               tomorrow
             {% endif %}
