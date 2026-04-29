@@ -1,7 +1,5 @@
-# EV Charging Widget — compact two-line status bar
+# EV Charging Widget — single-line smart status bar
 # Only visible when car is plugged in.
-# Line 1: status · price · power · session
-# Line 2: next slot · remaining potential (kWh + km)
 #
 # Run ./deploy.sh then copy the generated ev-widget-card.yaml
 # into your main dashboard's raw config.
@@ -18,7 +16,6 @@ card:
       ha-card {
         padding: 8px 14px !important;
         font-size: 13px;
-        line-height: 1.6;
         background: var(--card-background-color);
       }
   content: >-
@@ -36,26 +33,17 @@ card:
     {% set pot_km = states('sensor.ev_potential_range_today') | int(0) %}
     {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
     {% set session_km = (session_kwh / consumption * 100) | round(0) if consumption > 0 else 0 %}
-    {# === LINE 1: Status · Price · Power · Session === #}
+    {# --- Icon --- #}
     {% if voltage_status in ['critical', 'reduce'] %}⚠️
     {% elif force == 'on' %}⚡
     {% elif power > 100 %}🟢
     {% elif frc == '1' %}⏸️
     {% else %}🔌
     {% endif %}
-    {% if power > 100 %}**{{ (power / 1000) | round(1) }} kW** · {{ '{:.1f}'.format(price * 100) }} ct · {{ session_kwh | round(1) }} kWh · +{{ session_km }} km
-    {% elif session_kwh > 0.1 %}{{ session_kwh | round(1) }} kWh (+{{ session_km }} km) geladen · {{ '{:.1f}'.format(price * 100) }} ct
-    {% elif budget_used >= budget_max %}Budget erreicht · {{ budget_used | round(0) }}/{{ budget_max | round(0) }} €
+    {# --- Main info --- #}
+    {% if power > 100 %}**{{ (power / 1000) | round(1) }} kW** · {{ '{:.1f}'.format(price * 100) }} ct · {{ session_kwh | round(1) }} kWh · +{{ session_km }} km · noch {{ cheap_remaining }}h · {{ pot_kwh | round(1) }} kWh / {{ pot_km }} km mögl.
+    {% elif session_kwh > 0.1 %}{{ session_kwh | round(1) }} kWh (+{{ session_km }} km) · {{ '{:.1f}'.format(price * 100) }} ct · {% if next == 'now' %}▶ jetzt{% elif next == 'tomorrow' %}↗ morgen{% else %}↗ {{ next }}{% endif %} · {{ pot_kwh | round(1) }} kWh / {{ pot_km }} km mögl.
+    {% elif budget_used >= budget_max %}Budget · {{ budget_used | round(0) }}/{{ budget_max | round(0) }} € ⛔
     {% elif voltage_status in ['critical', 'reduce'] %}{{ states('sensor.ev_house_voltage_l1') | round(0) }} V · {{ '{:.1f}'.format(price * 100) }} ct
-    {% else %}Bereit · {{ '{:.1f}'.format(price * 100) }} ct
+    {% else %}{{ '{:.1f}'.format(price * 100) }} ct · {% if next == 'now' %}▶ jetzt{% elif next == 'tomorrow' %}↗ morgen{% else %}↗ {{ next }}{% endif %} · {{ pot_kwh | round(1) }} kWh / {{ pot_km }} km mögl.
     {% endif %}
-
-    {# === LINE 2: Schedule + Remaining potential === #}
-    🕐
-    {% if power > 100 and cheap_remaining > 0 %}noch {{ cheap_remaining }}h günstig
-    {% elif next == 'now' %}günstig — jetzt laden
-    {% elif next == 'tomorrow' %}nächste Slot morgen
-    {% elif next == 'unknown' %}kein Preisplan
-    {% else %}nächster Slot {{ next }}
-    {% endif %}
-    {% if pot_kwh > 0 %} · ⚡ {{ pot_kwh | round(1) }} kWh / {{ pot_km }} km möglich{% endif %}
