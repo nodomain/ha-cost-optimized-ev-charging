@@ -383,6 +383,56 @@ template:
              and has_value('input_number.ev_cheap_hours')
              and has_value('input_number.ev_current_normal') }}
 
+      # --- SoC-based hours calculation ---
+      - name: "EV hours needed to target"
+        unique_id: ev_hours_needed_to_target
+        unit_of_measurement: "h"
+        icon: mdi:clock-check-outline
+        state: >-
+          {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
+          {% set target = states('input_number.ev_target_soc') | float(80) %}
+          {% set capacity_kwh = 64.7 %}
+          {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
+          {% set kwh_needed = (target - soc) / 100 * capacity_kwh %}
+          {% if kwh_needed > 0 and power_kw > 0 %}
+            {{ (kwh_needed / power_kw) | round(1) }}
+          {% else %}
+            {{ 0 }}
+          {% endif %}
+        availability: >-
+          {{ has_value('sensor.ix1_xdrive30_battery_hv_state_of_charge') }}
+
+      - name: "EV charging efficiency"
+        unique_id: ev_charging_efficiency
+        unit_of_measurement: "%"
+        icon: mdi:transmission-tower-import
+        state_class: measurement
+        state: >-
+          {% set wallbox_w = states('sensor.goe_${GOE_SERIAL}_nrg_11') | float(0) %}
+          {% set bmw_w = states('sensor.ix1_xdrive30_battery_ev_charging_power') | float(0) %}
+          {% if wallbox_w > 100 and bmw_w > 0 %}
+            {{ (bmw_w / wallbox_w * 100) | round(1) }}
+          {% else %}
+            {{ 0 }}
+          {% endif %}
+        availability: >-
+          {{ has_value('sensor.goe_${GOE_SERIAL}_nrg_11')
+             and has_value('sensor.ix1_xdrive30_battery_ev_charging_power')
+             and states('sensor.goe_${GOE_SERIAL}_nrg_11') | float(0) > 100 }}
+
+      - name: "EV estimated full time"
+        unique_id: ev_estimated_full_time
+        icon: mdi:clock-end
+        state: >-
+          {% set hours = states('sensor.ev_hours_needed_to_target') | float(0) %}
+          {% if hours > 0 %}
+            {{ (now() + timedelta(hours=hours)).strftime('%H:%M') }}
+          {% else %}
+            —
+          {% endif %}
+        availability: >-
+          {{ has_value('sensor.ev_hours_needed_to_target') }}
+
       - name: "EV house voltage L1"
         unique_id: ev_house_voltage_l1
         unit_of_measurement: "V"
@@ -538,7 +588,14 @@ automation:
           budget_exceeded: >-
             {{ monthly_ev_cost >= monthly_budget }}
           cheap_hours: >-
-            {{ states('input_number.ev_cheap_hours') | int(6) }}
+            {% set max_hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
+            {% set target = states('input_number.ev_target_soc') | float(80) %}
+            {% set capacity_kwh = 64.7 %}
+            {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
+            {% set kwh_needed = (target - soc) / 100 * capacity_kwh %}
+            {% set hours_needed = (kwh_needed / power_kw) | round(0, 'ceil') | int if power_kw > 0 else max_hours %}
+            {{ [hours_needed, max_hours] | min if hours_needed > 0 else max_hours }}
           current_hour: "{{ now().hour }}"
           prices_today: >-
             {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
@@ -891,4 +948,68 @@ automation:
         target:
           entity_id: input_boolean.ev_force_charge
       # Don't reset frc here — let the scheduler decide on next tick
+    mode: single
+
+  # -------------------------------------------------------------------------
+  # REMINDER: forgot to plug in
+  # -------------------------------------------------------------------------
+  - id: ev_forgot_to_plug_in
+    alias: "EV: Forgot to plug in reminder"
+    description: >-
+      Reminds you at 22:00 if the car is home, not plugged in, and SoC is low.
+    triggers:
+      - trigger: time
+        at: "22:00:00"
+    conditions:
+      - condition: state
+        entity_id: device_tracker.ix1_xdrive30_location
+        state: "home"
+      - condition: state
+        entity_id: binary_sensor.goe_${GOE_SERIAL}_car_0
+        state: "off"
+      - condition: numeric_state
+        entity_id: sensor.ix1_xdrive30_battery_hv_state_of_charge
+        below: input_number.ev_target_soc
+    actions:
+      - action: notify.mobile_app_${IPHONE_DEVICE}
+        data:
+          title: "🔋 EV: Einstecken vergessen?"
+          message: >-
+            Auto ist zuhause aber nicht am Charger.
+            SoC: {{ states('sensor.ix1_xdrive30_battery_hv_state_of_charge') }}%
+            (Ziel: {{ states('input_number.ev_target_soc') | int }}%).
+            Reichweite: {{ states('sensor.ix1_xdrive30_range_ev_remaining_range') }} km.
+          data:
+            push:
+              sound: "default"
+              interruption-level: "time-sensitive"
+    mode: single
+
+  # -------------------------------------------------------------------------
+  # MONTHLY REPORT: summary on 1st of each month
+  # -------------------------------------------------------------------------
+  - id: ev_monthly_report
+    alias: "EV: Monthly charging report"
+    triggers:
+      - trigger: time
+        at: "08:00:00"
+    conditions:
+      - condition: template
+        value_template: "{{ now().day == 1 }}"
+    actions:
+      - variables:
+          cost: "{{ states('sensor.ev_charging_cost_monthly') | float(0) | round(2) }}"
+          energy: "{{ states('sensor.ev_energy_monthly') | float(0) | round(1) }}"
+          avg_price: "{{ states('sensor.ev_average_price_per_kwh_monthly') | float(0) | round(3) }}"
+          consumption: "{{ states('input_number.ev_consumption_per_100km') | float(22) }}"
+          range_km: "{{ (energy | float / consumption | float * 100) | round(0) if consumption | float > 0 else 0 }}"
+          budget: "{{ states('input_number.ev_monthly_budget') | float(50) }}"
+      - action: notify.mobile_app_${IPHONE_DEVICE}
+        data:
+          title: "📊 EV Monatsreport {{ (now() - timedelta(days=1)).strftime('%B %Y') }}"
+          message: >-
+            Energie: {{ energy }} kWh (~{{ range_km }} km)
+            Kosten: {{ cost }} EUR (Budget: {{ budget }} EUR)
+            Ø Preis: {{ avg_price }} EUR/kWh
+            Effizienz: {{ ((cost | float / energy | float) * 100) | round(1) if energy | float > 0 else '—' }} ct/kWh
     mode: single

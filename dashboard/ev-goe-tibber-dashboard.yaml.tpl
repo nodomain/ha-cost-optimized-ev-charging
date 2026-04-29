@@ -73,6 +73,20 @@ views:
           yellow: 30
           red: 0
 
+      # --- Smart charging info ---
+      - type: entities
+        title: "🧠 Smart Charging"
+        show_header_toggle: false
+        entities:
+          - entity: sensor.ev_hours_needed_to_target
+            name: Hours needed to target
+          - entity: sensor.ev_estimated_full_time
+            name: Estimated full at
+          - entity: sensor.ev_charging_efficiency
+            name: Charging efficiency
+          - entity: sensor.ev_charging_cost_rate
+            name: Current cost rate
+
       # --- Budget & cost ---
       - type: entities
         title: "💰 Budget"
@@ -269,6 +283,13 @@ views:
         entities:
           - entity: sensor.ix1_xdrive30_battery_hv_state_of_charge
             name: SoC
+
+      - type: history-graph
+        title: "⚡ Charging Efficiency (24h)"
+        hours_to_show: 24
+        entities:
+          - entity: sensor.ev_charging_efficiency
+            name: Efficiency %
 
       # --- Cost summary ---
       - type: entities
