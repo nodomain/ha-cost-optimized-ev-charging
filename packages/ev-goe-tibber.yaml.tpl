@@ -120,7 +120,7 @@ input_number:
 # TEMPLATE SENSORS
 # =============================================================================
 template:
-  # --- EV cost tracking ---
+  # --- All EV sensors in one consolidated block ---
   - sensor:
       - name: "EV charging cost rate"
         unique_id: ev_charging_cost_rate
@@ -132,8 +132,8 @@ template:
           {% set price = states('sensor.electricity_price_${TIBBER_HOME}') | float(0) %}
           {{ (power_w / 1000 * price) | round(3) }}
         availability: >-
-          {{ states('sensor.goe_${GOE_SERIAL}_nrg_11') | is_number
-             and states('sensor.electricity_price_${TIBBER_HOME}') | is_number }}
+          {{ has_value('sensor.goe_${GOE_SERIAL}_nrg_11')
+             and has_value('sensor.electricity_price_${TIBBER_HOME}') }}
 
       - name: "EV average price per kWh monthly"
         unique_id: ev_avg_price_kwh_monthly
@@ -143,6 +143,9 @@ template:
           {% set cost = states('sensor.ev_charging_cost_monthly') | float(0) %}
           {% set energy = states('sensor.ev_energy_monthly') | float(0) %}
           {{ (cost / energy) | round(3) if energy > 0 else 0 }}
+        availability: >-
+          {{ has_value('sensor.ev_charging_cost_monthly')
+             and has_value('sensor.ev_energy_monthly') }}
 
       - name: "EV expected price today"
         unique_id: ev_expected_price_today
@@ -171,20 +174,19 @@ template:
         icon: mdi:battery-charging
         state: >-
           {% set raw = state_attr('sensor.tibber_prices', 'today') %}
-          {% if raw is not none and raw | length >= 24 %}
-            {% set prices = raw | map(attribute='total') | list %}
-            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set current_hour = now().hour %}
-            {% set remaining_prices = prices[current_hour:] %}
-            {% set sorted_all = prices | sort %}
-            {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-            {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
-            {% set amps = states('input_number.ev_current_normal') | float(10) %}
-            {% set voltage = 230 %}
-            {{ (cheap_remaining | length * amps * voltage / 1000) | round(1) }}
-          {% else %}
-            {{ 0 }}
-          {% endif %}
+          {% set prices = raw | map(attribute='total') | list %}
+          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set current_hour = now().hour %}
+          {% set remaining_prices = prices[current_hour:] %}
+          {% set sorted_all = prices | sort %}
+          {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
+          {% set amps = states('input_number.ev_current_normal') | float(10) %}
+          {% set voltage = 230 %}
+          {{ (cheap_remaining | length * amps * voltage / 1000) | round(1) }}
+        availability: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'today') %}
+          {{ raw is not none and raw | length >= 24 }}
 
       - name: "EV potential range today"
         unique_id: ev_potential_range_today
@@ -192,22 +194,21 @@ template:
         icon: mdi:map-marker-distance
         state: >-
           {% set raw = state_attr('sensor.tibber_prices', 'today') %}
-          {% if raw is not none and raw | length >= 24 %}
-            {% set prices = raw | map(attribute='total') | list %}
-            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set current_hour = now().hour %}
-            {% set remaining_prices = prices[current_hour:] %}
-            {% set sorted_all = prices | sort %}
-            {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-            {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
-            {% set amps = states('input_number.ev_current_normal') | float(10) %}
-            {% set voltage = 230 %}
-            {% set kwh = cheap_remaining | length * amps * voltage / 1000 %}
-            {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
-            {{ (kwh / consumption * 100) | round(0) }}
-          {% else %}
-            {{ 0 }}
-          {% endif %}
+          {% set prices = raw | map(attribute='total') | list %}
+          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set current_hour = now().hour %}
+          {% set remaining_prices = prices[current_hour:] %}
+          {% set sorted_all = prices | sort %}
+          {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
+          {% set amps = states('input_number.ev_current_normal') | float(10) %}
+          {% set voltage = 230 %}
+          {% set kwh = cheap_remaining | length * amps * voltage / 1000 %}
+          {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
+          {{ (kwh / consumption * 100) | round(0) }}
+        availability: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'today') %}
+          {{ raw is not none and raw | length >= 24 }}
 
       - name: "EV cheap hours remaining"
         unique_id: ev_cheap_hours_remaining
@@ -215,40 +216,33 @@ template:
         icon: mdi:clock-fast
         state: >-
           {% set raw = state_attr('sensor.tibber_prices', 'today') %}
-          {% if raw is not none and raw | length >= 24 %}
-            {% set prices = raw | map(attribute='total') | list %}
-            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set current_hour = now().hour %}
-            {% set remaining_prices = prices[current_hour:] %}
-            {% set sorted_all = prices | sort %}
-            {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-            {{ remaining_prices | select('le', threshold) | list | length }}
-          {% else %}
-            {{ 0 }}
-          {% endif %}
+          {% set prices = raw | map(attribute='total') | list %}
+          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set current_hour = now().hour %}
+          {% set remaining_prices = prices[current_hour:] %}
+          {% set sorted_all = prices | sort %}
+          {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {{ remaining_prices | select('le', threshold) | list | length }}
+        availability: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'today') %}
+          {{ raw is not none and raw | length >= 24 }}
 
-  # --- Tomorrow preview (available after ~13:00 when Tibber publishes next day) ---
-  - sensor:
       - name: "EV tomorrow cheapest hours"
         unique_id: ev_tomorrow_cheapest_hours
         icon: mdi:calendar-arrow-right
         state: >-
           {% set raw = state_attr('sensor.tibber_prices', 'tomorrow') %}
-          {% if raw is not none and raw | length >= 24 %}
-            {% set prices = raw | map(attribute='total') | list %}
-            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set sorted = prices | sort %}
-            {% set threshold = sorted[hours - 1] %}
-            {% set ns = namespace(indices=[]) %}
-            {% for p in prices %}
-              {% if p <= threshold and ns.indices | length < hours %}
-                {% set ns.indices = ns.indices + [loop.index0] %}
-              {% endif %}
-            {% endfor %}
-            {{ ns.indices | map('string') | join(', ') }}h
-          {% else %}
-            unavailable
-          {% endif %}
+          {% set prices = raw | map(attribute='total') | list %}
+          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set sorted = prices | sort %}
+          {% set threshold = sorted[hours - 1] %}
+          {% set ns = namespace(indices=[]) %}
+          {% for p in prices %}
+            {% if p <= threshold and ns.indices | length < hours %}
+              {% set ns.indices = ns.indices + [loop.index0] %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.indices | map('string') | join(', ') }}h
         availability: >-
           {% set raw = state_attr('sensor.tibber_prices', 'tomorrow') %}
           {{ raw is not none and raw | length >= 24 }}
@@ -259,50 +253,41 @@ template:
         icon: mdi:calendar-clock
         state: >-
           {% set raw = state_attr('sensor.tibber_prices', 'tomorrow') %}
-          {% if raw is not none and raw | length >= 24 %}
-            {% set prices = raw | map(attribute='total') | list %}
-            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set cheap = (prices | sort)[:hours] %}
-            {{ (cheap | sum / cheap | length) | round(3) }}
-          {% else %}
-            {{ 0 }}
-          {% endif %}
+          {% set prices = raw | map(attribute='total') | list %}
+          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set cheap = (prices | sort)[:hours] %}
+          {{ (cheap | sum / cheap | length) | round(3) }}
         availability: >-
           {% set raw = state_attr('sensor.tibber_prices', 'tomorrow') %}
           {{ raw is not none and raw | length >= 24 }}
 
-  # --- Next cheap hour ---
-  - sensor:
       - name: "EV next cheap hour"
         unique_id: ev_next_cheap_hour
         icon: mdi:clock-start
         state: >-
           {% set raw = state_attr('sensor.tibber_prices', 'today') %}
-          {% if raw is not none and raw | length >= 24 %}
-            {% set prices = raw | map(attribute='total') | list %}
-            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set current_hour = now().hour %}
-            {% set sorted_all = prices | sort %}
-            {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-            {% set ns = namespace(found=-1) %}
-            {% for h in range(current_hour, 24) %}
-              {% if prices[h] <= threshold and ns.found == -1 %}
-                {% set ns.found = h %}
-              {% endif %}
-            {% endfor %}
-            {% if ns.found == current_hour %}
-              now
-            {% elif ns.found >= 0 %}
-              {{ '%02d' | format(ns.found) }}:00
-            {% else %}
-              tomorrow
+          {% set prices = raw | map(attribute='total') | list %}
+          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set current_hour = now().hour %}
+          {% set sorted_all = prices | sort %}
+          {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set ns = namespace(found=-1) %}
+          {% for h in range(current_hour, 24) %}
+            {% if prices[h] <= threshold and ns.found == -1 %}
+              {% set ns.found = h %}
             {% endif %}
+          {% endfor %}
+          {% if ns.found == current_hour %}
+            now
+          {% elif ns.found >= 0 %}
+            {{ '%02d' | format(ns.found) }}:00
           {% else %}
-            unknown
+            tomorrow
           {% endif %}
+        availability: >-
+          {% set raw = state_attr('sensor.tibber_prices', 'today') %}
+          {{ raw is not none and raw | length >= 24 }}
 
-  # --- Cost forecast ---
-  - sensor:
       - name: "EV monthly cost forecast"
         unique_id: ev_monthly_cost_forecast
         unit_of_measurement: "EUR"
@@ -316,6 +301,8 @@ template:
           {% else %}
             {{ cost_so_far | round(2) }}
           {% endif %}
+        availability: >-
+          {{ has_value('sensor.ev_charging_cost_monthly') }}
 
       - name: "EV monthly range forecast"
         unique_id: ev_monthly_range_forecast
@@ -334,14 +321,19 @@ template:
           {% set budget_limited_kwh = budget / avg_price if avg_price > 0 else monthly_kwh_unlimited %}
           {% set monthly_kwh = [monthly_kwh_unlimited, budget_limited_kwh] | min %}
           {{ (monthly_kwh / consumption * 100) | round(0) }}
+        availability: >-
+          {{ has_value('sensor.ev_expected_price_today')
+             and has_value('input_number.ev_cheap_hours')
+             and has_value('input_number.ev_current_normal') }}
 
-  # --- Voltage monitoring ---
-  - sensor:
       - name: "EV house voltage L1"
         unique_id: ev_house_voltage_l1
         unit_of_measurement: "V"
         device_class: voltage
+        state_class: measurement
         state: "{{ states('sensor.voltage_phase1_${TIBBER_HOME}') | float(0) }}"
+        availability: >-
+          {{ has_value('sensor.voltage_phase1_${TIBBER_HOME}') }}
 
       - name: "EV voltage status"
         unique_id: ev_voltage_status
@@ -356,8 +348,10 @@ template:
           {% elif v <= reduce %}reduce
           {% elif v <= warn %}warning
           {% else %}ok{% endif %}
+        availability: >-
+          {{ has_value('sensor.voltage_phase1_${TIBBER_HOME}') }}
 
-  - binary_sensor:
+    binary_sensor:
       - name: "EV voltage warning zone"
         unique_id: ev_voltage_warning_zone
         device_class: problem
@@ -365,6 +359,8 @@ template:
           {{ states('sensor.voltage_phase1_${TIBBER_HOME}') | float(0)
              <= states('input_number.ev_voltage_warn') | float(215)
              and states('sensor.voltage_phase1_${TIBBER_HOME}') | float(0) > 0 }}
+        availability: >-
+          {{ has_value('sensor.voltage_phase1_${TIBBER_HOME}') }}
 
       - name: "EV voltage reduce zone"
         unique_id: ev_voltage_reduce_zone
@@ -373,6 +369,8 @@ template:
           {{ states('sensor.voltage_phase1_${TIBBER_HOME}') | float(0)
              <= states('input_number.ev_voltage_reduce') | float(210)
              and states('sensor.voltage_phase1_${TIBBER_HOME}') | float(0) > 0 }}
+        availability: >-
+          {{ has_value('sensor.voltage_phase1_${TIBBER_HOME}') }}
 
       - name: "EV voltage critical zone"
         unique_id: ev_voltage_critical_zone
@@ -381,6 +379,8 @@ template:
           {{ states('sensor.voltage_phase1_${TIBBER_HOME}') | float(0)
              <= states('input_number.ev_voltage_stop') | float(208)
              and states('sensor.voltage_phase1_${TIBBER_HOME}') | float(0) > 0 }}
+        availability: >-
+          {{ has_value('sensor.voltage_phase1_${TIBBER_HOME}') }}
 
 # =============================================================================
 # INTEGRATION SENSOR — Riemann sum for accumulated EV cost
@@ -519,7 +519,7 @@ automation:
           # --- START charging: set frc=2 ---
           - conditions:
               - condition: template
-                value_template: "{{ should_charge and current_frc != '2' }}"
+                value_template: "{{ should_charge and current_frc | int != 2 }}"
             sequence:
               - action: select.select_option
                 target:
@@ -531,6 +531,13 @@ automation:
                   entity_id: number.goe_${GOE_SERIAL}_amp
                 data:
                   value: "{{ states('input_number.ev_current_normal') | int(10) }}"
+              # Wait for charger to confirm frc=2 before notifying
+              # (prevents duplicate notifications on next trigger cycle)
+              - wait_template: "{{ states('select.goe_${GOE_SERIAL}_frc') == '2' }}"
+                timeout: "00:00:30"
+                continue_on_timeout: true
+              - condition: template
+                value_template: "{{ wait.completed }}"
               - action: notify.mobile_app_${IPHONE_DEVICE}
                 data:
                   title: "🔌 EV charging started"
@@ -547,16 +554,22 @@ automation:
           # --- STOP charging: set frc=1 (force stop, not neutral!) ---
           - conditions:
               - condition: template
-                value_template: "{{ not should_charge and current_frc != '1' }}"
+                value_template: "{{ not should_charge and current_frc | int != 1 }}"
             sequence:
               - action: select.select_option
                 target:
                   entity_id: select.goe_${GOE_SERIAL}_frc
                 data:
                   option: "1"
+              # Wait for charger to confirm frc=1
+              - wait_template: "{{ states('select.goe_${GOE_SERIAL}_frc') == '1' }}"
+                timeout: "00:00:30"
+                continue_on_timeout: true
+              - condition: template
+                value_template: "{{ wait.completed }}"
               # Only notify when transitioning FROM active charging
               - condition: template
-                value_template: "{{ current_frc == '2' }}"
+                value_template: "{{ current_frc | int == 2 }}"
               - action: notify.mobile_app_${IPHONE_DEVICE}
                 data:
                   title: >-

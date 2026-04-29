@@ -42,14 +42,18 @@ echo "   GOE_SERIAL=$GOE_SERIAL"
 echo "   TIBBER_HOME=$TIBBER_HOME"
 echo "   IPHONE_DEVICE=$IPHONE_DEVICE"
 
+# --- Ensure output subfolder exists ---
+OUT_DIR="$TARGET/ha-cost-optimized-ev-charging"
+mkdir -p "$OUT_DIR"
+
 # --- Generate from templates ---
-envsubst < "$SCRIPT_DIR/packages/ev-goe-tibber.yaml.tpl" > "$TARGET/ev-goe-tibber.yaml"
-envsubst < "$SCRIPT_DIR/dashboard/ev-goe-tibber-dashboard.yaml.tpl" > "$TARGET/ev-goe-tibber-dashboard.yaml"
-envsubst < "$SCRIPT_DIR/dashboard/ev-widget-card.yaml.tpl" > "$TARGET/ev-widget-card.yaml"
+envsubst < "$SCRIPT_DIR/packages/ev-goe-tibber.yaml.tpl" > "$OUT_DIR/ev-goe-tibber.yaml"
+envsubst < "$SCRIPT_DIR/dashboard/ev-goe-tibber-dashboard.yaml.tpl" > "$OUT_DIR/ev-goe-tibber-dashboard.yaml"
+envsubst < "$SCRIPT_DIR/dashboard/ev-widget-card.yaml.tpl" > "$OUT_DIR/ev-widget-card.yaml"
 
 echo "✅ Deployed:"
-echo "   $TARGET/ev-goe-tibber.yaml"
-echo "   $TARGET/ev-goe-tibber-dashboard.yaml"
-echo "   $TARGET/ev-widget-card.yaml"
+echo "   $OUT_DIR/ev-goe-tibber.yaml"
+echo "   $OUT_DIR/ev-goe-tibber-dashboard.yaml"
+echo "   $OUT_DIR/ev-widget-card.yaml"
 echo ""
 echo "👉 Restart Home Assistant to apply changes."
