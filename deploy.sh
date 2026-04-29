@@ -45,9 +45,11 @@ echo "   IPHONE_DEVICE=$IPHONE_DEVICE"
 # --- Generate from templates ---
 envsubst < "$SCRIPT_DIR/packages/ev-goe-tibber.yaml.tpl" > "$TARGET/ev-goe-tibber.yaml"
 envsubst < "$SCRIPT_DIR/dashboard/ev-goe-tibber-dashboard.yaml.tpl" > "$TARGET/ev-goe-tibber-dashboard.yaml"
+envsubst < "$SCRIPT_DIR/dashboard/ev-widget-card.yaml.tpl" > "$TARGET/ev-widget-card.yaml"
 
 echo "✅ Deployed:"
 echo "   $TARGET/ev-goe-tibber.yaml"
 echo "   $TARGET/ev-goe-tibber-dashboard.yaml"
+echo "   $TARGET/ev-widget-card.yaml"
 echo ""
 echo "👉 Restart Home Assistant to apply changes."
