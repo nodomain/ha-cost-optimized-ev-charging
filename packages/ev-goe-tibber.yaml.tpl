@@ -126,6 +126,19 @@ input_number:
     mode: box
     initial: 208
 
+  ev_cheap_price_tolerance:
+    name: "EV cheap price tolerance"
+    # Hours whose price is within this % above the top-N threshold also
+    # count as cheap. Prevents arbitrary exclusion of near-threshold hours
+    # in flat price valleys (e.g. 0.1797 ct vs 0.1783 ct cutoff).
+    min: 0
+    max: 20
+    step: 0.5
+    unit_of_measurement: "%"
+    icon: mdi:plus-minus-variant
+    mode: box
+    initial: 3
+
 # =============================================================================
 # TEMPLATE SENSORS
 # =============================================================================
@@ -213,8 +226,11 @@ template:
           {% if raw is not none and raw | length > 0 %}
             {% set prices = raw | map(attribute='total') | list %}
             {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
             {% if prices | length >= hours %}
-              {% set cheap = (prices | sort)[:hours] %}
+              {% set base = (prices | sort)[hours - 1] %}
+              {% set threshold = base * (1 + tol) %}
+              {% set cheap = prices | select('le', threshold) | list %}
               {{ (cheap | sum / cheap | length) | round(3) }}
             {% else %}
               {{ 0 }}
@@ -233,10 +249,12 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
           {% set current_hour = now().hour %}
           {% set remaining_prices = prices[current_hour:] %}
           {% set sorted_all = prices | sort %}
-          {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set threshold = base * (1 + tol) %}
           {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {% set voltage = 230 %}
@@ -253,10 +271,12 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
           {% set current_hour = now().hour %}
           {% set remaining_prices = prices[current_hour:] %}
           {% set sorted_all = prices | sort %}
-          {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set threshold = base * (1 + tol) %}
           {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {% set voltage = 230 %}
@@ -275,10 +295,12 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
           {% set current_hour = now().hour %}
           {% set remaining_prices = prices[current_hour:] %}
           {% set sorted_all = prices | sort %}
-          {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set threshold = base * (1 + tol) %}
           {{ remaining_prices | select('le', threshold) | list | length }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
@@ -291,11 +313,13 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'tomorrow') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
           {% set sorted = prices | sort %}
-          {% set threshold = sorted[hours - 1] %}
+          {% set base = sorted[hours - 1] %}
+          {% set threshold = base * (1 + tol) %}
           {% set ns = namespace(indices=[]) %}
           {% for p in prices %}
-            {% if p <= threshold and ns.indices | length < hours %}
+            {% if p <= threshold %}
               {% set ns.indices = ns.indices + [loop.index0] %}
             {% endif %}
           {% endfor %}
@@ -325,9 +349,11 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
           {% set current_hour = now().hour %}
           {% set sorted_all = prices | sort %}
-          {% set threshold = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
+          {% set threshold = base * (1 + tol) %}
           {% set ns = namespace(found=-1) %}
           {% for h in range(current_hour, 24) %}
             {% if prices[h] <= threshold and ns.found == -1 %}
@@ -608,9 +634,11 @@ automation:
           sorted_prices: >-
             {{ combined_prices | sort if combined_prices | length > 0 else [] }}
           price_threshold: >-
-            {{ sorted_prices[cheap_hours - 1]
+            {% set base = sorted_prices[cheap_hours - 1]
                if sorted_prices | length >= cheap_hours
-               else 999 }}
+               else 999 %}
+            {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+            {{ base * (1 + tol) }}
           current_price: >-
             {{ prices_today[current_hour | int]
                if prices_today | length > current_hour | int

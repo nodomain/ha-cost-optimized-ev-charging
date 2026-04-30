@@ -121,6 +121,8 @@ views:
         entities:
           - entity: input_number.ev_cheap_hours
             name: Cheap hours per day
+          - entity: input_number.ev_cheap_price_tolerance
+            name: Cheap price tolerance
           - entity: input_number.ev_target_soc
             name: Charge target SoC
           - entity: sensor.ev_next_cheap_hour
