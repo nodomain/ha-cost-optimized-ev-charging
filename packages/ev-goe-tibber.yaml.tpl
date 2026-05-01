@@ -229,7 +229,7 @@ template:
             {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
             {% if prices | length >= hours %}
               {% set base = (prices | sort)[hours - 1] %}
-              {% set threshold = base * (1 + tol) %}
+              {% set threshold = base + (base | abs) * tol %}
               {% set cheap = prices | select('le', threshold) | list %}
               {{ (cheap | sum / cheap | length) | round(3) }}
             {% else %}
@@ -254,7 +254,7 @@ template:
           {% set remaining_prices = prices[current_hour:] %}
           {% set sorted_all = prices | sort %}
           {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-          {% set threshold = base * (1 + tol) %}
+          {% set threshold = base + (base | abs) * tol %}
           {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {% set voltage = 230 %}
@@ -276,7 +276,7 @@ template:
           {% set remaining_prices = prices[current_hour:] %}
           {% set sorted_all = prices | sort %}
           {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-          {% set threshold = base * (1 + tol) %}
+          {% set threshold = base + (base | abs) * tol %}
           {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {% set voltage = 230 %}
@@ -300,7 +300,7 @@ template:
           {% set remaining_prices = prices[current_hour:] %}
           {% set sorted_all = prices | sort %}
           {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-          {% set threshold = base * (1 + tol) %}
+          {% set threshold = base + (base | abs) * tol %}
           {{ remaining_prices | select('le', threshold) | list | length }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
@@ -316,7 +316,7 @@ template:
           {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
           {% set sorted = prices | sort %}
           {% set base = sorted[hours - 1] %}
-          {% set threshold = base * (1 + tol) %}
+          {% set threshold = base + (base | abs) * tol %}
           {% set ns = namespace(indices=[]) %}
           {% for p in prices %}
             {% if p <= threshold %}
@@ -336,7 +336,11 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'tomorrow') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set cheap = (prices | sort)[:hours] %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+          {% set sorted = prices | sort %}
+          {% set base = sorted[hours - 1] %}
+          {% set threshold = base + (base | abs) * tol %}
+          {% set cheap = prices | select('le', threshold) | list %}
           {{ (cheap | sum / cheap | length) | round(3) }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'tomorrow') %}
@@ -353,7 +357,7 @@ template:
           {% set current_hour = now().hour %}
           {% set sorted_all = prices | sort %}
           {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-          {% set threshold = base * (1 + tol) %}
+          {% set threshold = base + (base | abs) * tol %}
           {% set ns = namespace(found=-1) %}
           {% for h in range(current_hour, 24) %}
             {% if prices[h] <= threshold and ns.found == -1 %}
@@ -378,7 +382,7 @@ template:
         state: >-
           {% set cost_so_far = states('sensor.ev_charging_cost_monthly') | float(0) %}
           {% set day_of_month = now().day %}
-          {% if day_of_month > 1 and cost_so_far > 0 %}
+          {% if day_of_month > 1 and cost_so_far != 0 %}
             {% set days_in_month = ((now().replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)).day %}
             {{ (cost_so_far / day_of_month * days_in_month) | round(2) }}
           {% else %}
@@ -538,18 +542,21 @@ utility_meter:
     name: "EV charging cost monthly"
     unique_id: ev_cost_monthly
     cycle: monthly
+    net_consumption: true
 
   ev_cost_quarterly:
     source: sensor.ev_charging_cost_total
     name: "EV charging cost quarterly"
     unique_id: ev_cost_quarterly
     cycle: quarterly
+    net_consumption: true
 
   ev_cost_yearly:
     source: sensor.ev_charging_cost_total
     name: "EV charging cost yearly"
     unique_id: ev_cost_yearly
     cycle: yearly
+    net_consumption: true
 
   # --- EV energy ---
   ev_energy_monthly:
@@ -638,7 +645,7 @@ automation:
                if sorted_prices | length >= cheap_hours
                else 999 %}
             {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
-            {{ base * (1 + tol) }}
+            {{ base + (base | abs) * tol }}
           current_price: >-
             {{ prices_today[current_hour | int]
                if prices_today | length > current_hour | int

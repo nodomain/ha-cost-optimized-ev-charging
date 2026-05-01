@@ -9,6 +9,7 @@ Smart EV charging automation for Home Assistant using Tibber dynamic pricing, go
 - **Dynamic hour calculation** — automatically computes how many cheap hours are needed based on current SoC and target
 - **Overnight charging** — combines today + tomorrow prices for optimal scheduling across midnight
 - **Monthly EV cost budget** — tracks EV-specific cost and stops when budget is reached
+- **Negative price handling** — fully supports negative energy prices. Charging during negative prices correctly *reduces* your accumulated monthly cost and frees up budget.
 - **BMW CarData integration** — live SoC, range, charging state via MQTT
 - **Charging efficiency tracking** — compares wallbox power vs BMW-reported battery power (shows losses)
 - **Plug-in reminder** — push notification at 22:00 if car is home but not plugged in and SoC is low
