@@ -479,6 +479,7 @@ template:
             {% else %}
               {% set prices_today = raw_today | map(attribute='total') | list %}
               {% set prices_tomorrow = raw_tomorrow | map(attribute='total') | list if raw_tomorrow is not none else [] %}
+              {% set tomorrow_available = prices_tomorrow | length >= 24 %}
               {% set combined = prices_today + prices_tomorrow %}
               {% set max_hours = states('input_number.ev_cheap_hours') | int(6) %}
               {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
@@ -506,6 +507,8 @@ template:
                   {% else %}
                     > 48h
                   {% endif %}
+                {% elif not tomorrow_available %}
+                  morgen (Preise folgen ~13:00)
                 {% else %}
                   — nicht genug billige Stunden
                 {% endif %}
