@@ -463,14 +463,61 @@ template:
         unique_id: ev_estimated_full_time
         icon: mdi:clock-end
         state: >-
-          {% set hours = states('sensor.ev_hours_needed_to_target') | float(0) %}
-          {% if hours > 0 %}
-            {{ (now() + timedelta(hours=hours)).strftime('%H:%M') }}
+          {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
+          {% set target = states('input_number.ev_target_soc') | float(80) %}
+          {% set capacity_kwh = 64.7 %}
+          {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
+          {% set kwh_needed = (target - soc) / 100 * capacity_kwh %}
+          {% if kwh_needed <= 0 or power_kw <= 0 %}
+            ✓ Ziel erreicht
           {% else %}
-            —
+            {% set hours_needed = (kwh_needed / power_kw) | round(0, 'ceil') | int %}
+            {% set raw_today = state_attr('sensor.ev_price_cache', 'today') %}
+            {% set raw_tomorrow = state_attr('sensor.ev_price_cache', 'tomorrow') %}
+            {% if raw_today is none %}
+              —
+            {% else %}
+              {% set prices_today = raw_today | map(attribute='total') | list %}
+              {% set prices_tomorrow = raw_tomorrow | map(attribute='total') | list if raw_tomorrow is not none else [] %}
+              {% set combined = prices_today + prices_tomorrow %}
+              {% set max_hours = states('input_number.ev_cheap_hours') | int(6) %}
+              {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+              {% set sorted_all = combined | sort %}
+              {% if sorted_all | length >= max_hours and combined | length > now().hour %}
+                {% set base = sorted_all[max_hours - 1] %}
+                {% set threshold = base + (base | abs) * tol %}
+                {% set current_hour = now().hour %}
+                {% set ns = namespace(count=0, end_hour=-1) %}
+                {% for i in range(current_hour, combined | length) %}
+                  {% if ns.end_hour == -1 and combined[i] <= threshold %}
+                    {% set ns.count = ns.count + 1 %}
+                    {% if ns.count >= hours_needed %}
+                      {% set ns.end_hour = i + 1 %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+                {% if ns.end_hour > 0 %}
+                  {% if ns.end_hour < 24 %}
+                    heute {{ '%02d:00' | format(ns.end_hour) }}
+                  {% elif ns.end_hour == 24 %}
+                    morgen 00:00
+                  {% elif ns.end_hour < 48 %}
+                    morgen {{ '%02d:00' | format(ns.end_hour - 24) }}
+                  {% else %}
+                    > 48h
+                  {% endif %}
+                {% else %}
+                  — nicht genug billige Stunden
+                {% endif %}
+              {% else %}
+                —
+              {% endif %}
+            {% endif %}
           {% endif %}
         availability: >-
-          {{ has_value('sensor.ev_hours_needed_to_target') }}
+          {{ has_value('sensor.ix1_xdrive30_battery_hv_state_of_charge')
+             and has_value('input_number.ev_target_soc')
+             and has_value('input_number.ev_current_normal') }}
 
       - name: "EV house voltage L1"
         unique_id: ev_house_voltage_l1
