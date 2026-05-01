@@ -440,15 +440,15 @@ template:
         state: >-
           {% set wallbox_w = states('sensor.goe_${GOE_SERIAL}_nrg_11') | float(0) %}
           {% set bmw_w = states('sensor.ix1_xdrive30_battery_ev_charging_power') | float(0) %}
-          {% if wallbox_w > 100 and bmw_w > 0 %}
-            {{ (bmw_w / wallbox_w * 100) | round(1) }}
+          {% if wallbox_w > 1000 and bmw_w > 0 %}
+            {% set eff = (bmw_w / wallbox_w * 100) | round(1) %}
+            {{ [eff, 100.0] | min }}
           {% else %}
             {{ 0 }}
           {% endif %}
         availability: >-
           {{ has_value('sensor.goe_${GOE_SERIAL}_nrg_11')
-             and has_value('sensor.ix1_xdrive30_battery_ev_charging_power')
-             and states('sensor.goe_${GOE_SERIAL}_nrg_11') | float(0) > 100 }}
+             and has_value('sensor.ix1_xdrive30_battery_ev_charging_power') }}
 
       - name: "EV estimated full time"
         unique_id: ev_estimated_full_time
