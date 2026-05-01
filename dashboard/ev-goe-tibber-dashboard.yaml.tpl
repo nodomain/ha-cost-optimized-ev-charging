@@ -47,8 +47,6 @@ views:
         entities:
           - entity: sensor.ix1_xdrive30_battery_hv_state_of_charge
             name: Battery SoC
-          - entity: input_number.ev_target_soc
-            name: Target SoC
           - entity: sensor.ix1_xdrive30_range_ev_remaining_range
             name: Remaining range
           - entity: sensor.ix1_xdrive30_battery_ev_charging_power
@@ -162,8 +160,6 @@ views:
             name: Projected monthly cost
           - entity: sensor.ev_monthly_range_forecast
             name: Projected monthly range
-          - entity: input_number.ev_monthly_budget
-            name: Monthly budget limit
 
       # --- Quick action buttons ---
       - type: horizontal-stack
