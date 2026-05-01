@@ -11,6 +11,7 @@ Smart EV charging automation for Home Assistant using Tibber dynamic pricing, go
 - **Monthly EV cost budget** — tracks EV-specific cost and stops when budget is reached
 - **Negative price handling** — fully supports negative energy prices. Charging during negative prices correctly *reduces* your accumulated monthly cost and frees up budget.
 - **BMW CarData integration** — live SoC, range, charging state via MQTT
+- **Dynamic consumption tracking** — calculates real-time vehicle efficiency (kWh/100km) directly from BMW's internal range estimates to keep range forecasts highly accurate across seasons.
 - **Charging efficiency tracking** — compares wallbox power vs BMW-reported battery power (shows losses)
 - **Plug-in reminder** — push notification at 22:00 if car is home but not plugged in and SoC is low
 - **Monthly report** — automated summary on the 1st of each month (kWh, EUR, km, avg price)
@@ -67,7 +68,6 @@ All parameters are adjustable from the HA dashboard at runtime:
 | Cheap hours/day | 6 | Maximum cheap hours (actual hours are dynamically calculated from SoC) |
 | Normal current | 10 A | Standard charging current (Schuko) |
 | Safe current | 6 A | Reduced current on low voltage |
-| Consumption | 22 kWh/100km | Vehicle efficiency for range calculation |
 | Voltage warn | 215 V | Notification threshold |
 | Voltage reduce | 210 V | Current reduction threshold |
 | Voltage stop | 208 V | Force-stop threshold |
