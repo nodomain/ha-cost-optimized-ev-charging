@@ -163,14 +163,32 @@ views:
             name: Voltage status
 
       # --- Tomorrow preview ---
-      - type: entities
-        title: "📅 Tomorrow"
-        show_header_toggle: false
-        entities:
+      - type: conditional
+        conditions:
           - entity: sensor.ev_tomorrow_cheapest_hours
-            name: Cheapest hours
-          - entity: sensor.ev_tomorrow_expected_price
-            name: Expected avg. price
+            state_not: "unavailable"
+        card:
+          type: entities
+          title: "📅 Tomorrow"
+          show_header_toggle: false
+          entities:
+            - entity: sensor.ev_tomorrow_cheapest_hours
+              name: Cheapest hours
+            - entity: sensor.ev_tomorrow_expected_price
+              name: Expected avg. price
+
+      - type: conditional
+        conditions:
+          - entity: sensor.ev_tomorrow_cheapest_hours
+            state: "unavailable"
+        card:
+          type: markdown
+          content: |
+            ## 📅 Tomorrow
+
+            ⏳ Preise verfügbar ab ca. **13:00 Uhr**
+
+            *(Tibber veröffentlicht die Preise für morgen am Nachmittag.)*
 
 
 
