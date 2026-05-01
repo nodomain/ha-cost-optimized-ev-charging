@@ -135,7 +135,7 @@ views:
             name: Potential energy remaining
           - entity: sensor.ev_potential_range_today
             name: Potential range remaining
-          - entity: input_number.ev_consumption_per_100km
+          - entity: sensor.ev_average_consumption
             name: Vehicle consumption
           - type: divider
           - entity: sensor.electricity_price_${TIBBER_HOME}

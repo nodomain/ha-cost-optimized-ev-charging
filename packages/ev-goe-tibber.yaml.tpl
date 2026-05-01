@@ -74,16 +74,7 @@ input_number:
     mode: box
     initial: 10
 
-  # --- Vehicle parameters ---
-  ev_consumption_per_100km:
-    name: "EV consumption per 100 km"
-    min: 10
-    max: 40
-    step: 0.5
-    unit_of_measurement: "kWh/100km"
-    icon: mdi:car-electric-outline
-    mode: box
-    initial: 22
+
 
   ev_target_soc:
     name: "EV target state of charge"
@@ -192,6 +183,24 @@ template:
 
   # --- All EV sensors in one consolidated block ---
   - sensor:
+      - name: "EV average consumption"
+        unique_id: ev_average_consumption
+        unit_of_measurement: "kWh/100km"
+        icon: mdi:car-electric
+        state: >-
+          {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
+          {% set range_km = states('sensor.ix1_xdrive30_range_ev_remaining_range') | float(0) %}
+          {% set capacity_kwh = 64.7 %}
+          {% if soc > 0 and range_km > 0 %}
+            {% set energy_current = capacity_kwh * (soc / 100) %}
+            {{ (energy_current / range_km * 100) | round(1) }}
+          {% else %}
+            22.0
+          {% endif %}
+        availability: >-
+          {{ has_value('sensor.ix1_xdrive30_battery_hv_state_of_charge')
+             and has_value('sensor.ix1_xdrive30_range_ev_remaining_range') }}
+
       - name: "EV charging cost rate"
         unique_id: ev_charging_cost_rate
         unit_of_measurement: "EUR/h"
@@ -281,7 +290,7 @@ template:
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {% set voltage = 230 %}
           {% set kwh = cheap_remaining | length * amps * voltage / 1000 %}
-          {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
+          {% set consumption = states('sensor.ev_average_consumption') | float(22) %}
           {{ (kwh / consumption * 100) | round(0) }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
@@ -399,7 +408,7 @@ template:
           {% set hours = states('input_number.ev_cheap_hours') | float(6) %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {% set voltage = 230 %}
-          {% set consumption = states('input_number.ev_consumption_per_100km') | float(22) %}
+          {% set consumption = states('sensor.ev_average_consumption') | float(22) %}
           {% set budget = states('input_number.ev_monthly_budget') | float(50) %}
           {% set avg_price = states('sensor.ev_expected_price_today') | float(0.20) %}
           {% set days_in_month = ((now().replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)).day %}
@@ -1036,7 +1045,7 @@ automation:
           cost: "{{ states('sensor.ev_charging_cost_monthly') | float(0) | round(2) }}"
           energy: "{{ states('sensor.ev_energy_monthly') | float(0) | round(1) }}"
           avg_price: "{{ states('sensor.ev_average_price_per_kwh_monthly') | float(0) | round(3) }}"
-          consumption: "{{ states('input_number.ev_consumption_per_100km') | float(22) }}"
+          consumption: "{{ states('sensor.ev_average_consumption') | float(22) }}"
           range_km: "{{ (energy | float / consumption | float * 100) | round(0) if consumption | float > 0 else 0 }}"
           budget: "{{ states('input_number.ev_monthly_budget') | float(50) }}"
       - action: notify.mobile_app_${IPHONE_DEVICE}
