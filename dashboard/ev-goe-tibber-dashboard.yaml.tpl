@@ -22,6 +22,24 @@ views:
         show_state: false
         show_name: false
 
+      # --- Quick action buttons ---
+      - type: horizontal-stack
+        cards:
+          - type: button
+            entity: input_boolean.ev_smart_charging_enabled
+            name: Smart Charging
+            icon: mdi:robot
+            show_state: true
+            tap_action:
+              action: toggle
+          - type: button
+            entity: input_boolean.ev_force_charge
+            name: Force Charge
+            icon: mdi:flash
+            show_state: true
+            tap_action:
+              action: toggle
+
       # --- Charger status ---
       - type: entities
         title: "🔌 Charger"
@@ -29,10 +47,6 @@ views:
         entities:
           - entity: binary_sensor.goe_${GOE_SERIAL}_car_0
             name: Car connected
-          - entity: sensor.goe_${GOE_SERIAL}_car_value
-            name: Vehicle status
-          - entity: select.goe_${GOE_SERIAL}_frc
-            name: Charge mode
           - entity: sensor.goe_${GOE_SERIAL}_nrg_4
             name: Charging current (actual)
           - entity: sensor.goe_${GOE_SERIAL}_nrg_11
@@ -87,7 +101,7 @@ views:
 
       # --- Budget & cost ---
       - type: entities
-        title: "💰 Budget"
+        title: "💰 Finances & Forecast"
         show_header_toggle: false
         entities:
           - entity: input_number.ev_monthly_budget
@@ -98,6 +112,11 @@ views:
             name: Energy this month
           - entity: sensor.ev_average_price_per_kwh_monthly
             name: Average price per kWh
+          - type: divider
+          - entity: sensor.ev_monthly_cost_forecast
+            name: Projected monthly cost
+          - entity: sensor.ev_monthly_range_forecast
+            name: Projected monthly range
 
       # --- Budget gauge ---
       - type: gauge
@@ -112,29 +131,31 @@ views:
           yellow: 35
           red: 45
 
-      # --- Scheduling ---
+      # --- Scheduling Settings ---
       - type: entities
-        title: "⏰ Scheduling"
+        title: "⚙️ Schedule Settings"
         show_header_toggle: false
         entities:
+          - entity: input_number.ev_target_soc
+            name: Charge target SoC
           - entity: input_number.ev_cheap_hours
             name: Cheap hours per day
           - entity: input_number.ev_cheap_price_tolerance
             name: Cheap price tolerance
-          - entity: input_number.ev_target_soc
-            name: Charge target SoC
+
+      # --- Live Info ---
+      - type: entities
+        title: "ℹ️ Live Info"
+        show_header_toggle: false
+        entities:
           - entity: sensor.ev_next_cheap_hour
             name: Next cheap hour
           - entity: sensor.ev_cheap_hours_remaining
             name: Cheap hours remaining today
           - entity: sensor.ev_expected_price_today
             name: Expected avg. price today
-          - entity: sensor.ev_potential_energy_today
-            name: Potential energy remaining
           - entity: sensor.ev_potential_range_today
             name: Potential range remaining
-          - entity: sensor.ev_average_consumption
-            name: Vehicle consumption
           - type: divider
           - entity: sensor.electricity_price_${TIBBER_HOME}
             name: Current electricity price
@@ -151,35 +172,9 @@ views:
           - entity: sensor.ev_tomorrow_expected_price
             name: Expected avg. price
 
-      # --- Cost forecast ---
-      - type: entities
-        title: "📈 Forecast"
-        show_header_toggle: false
-        entities:
-          - entity: sensor.ev_monthly_cost_forecast
-            name: Projected monthly cost
-          - entity: sensor.ev_monthly_range_forecast
-            name: Projected monthly range
 
-      # --- Quick action buttons ---
-      - type: horizontal-stack
-        cards:
-          - type: button
-            entity: input_boolean.ev_smart_charging_enabled
-            name: Smart Charging
-            icon: mdi:robot
-            show_state: true
-            tap_action:
-              action: toggle
-          - type: button
-            entity: input_boolean.ev_force_charge
-            name: Force Charge
-            icon: mdi:flash
-            show_state: true
-            tap_action:
-              action: toggle
 
-  # =========================================================================
+
   # VIEW 2: SETTINGS & DETAILS
   # =========================================================================
   - title: Settings
