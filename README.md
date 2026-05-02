@@ -4,8 +4,9 @@ Smart EV charging automation for Home Assistant using Tibber dynamic pricing, go
 
 ## Features
 
-- **Smart scheduling** — charges only during the X cheapest hours of the day (Tibber 15-min prices)
-- **SoC-based stop** — stops charging when battery reaches target SoC (default 80%)
+- **Smart scheduling** — charges only during the cheapest hours of the day (Tibber 15-min prices) using a "Natural Cheap Window" algorithm (base + tolerance + daily-avg ceiling)
+- **Live-price decisions** — scheduler compares against the live Tibber price, not just the hourly sample, so it reacts to intra-hour price drops
+- **SoC-based stop** — stops charging when battery reaches target SoC (default 100%)
 - **Dynamic hour calculation** — automatically computes how many cheap hours are needed based on current SoC and target
 - **Overnight charging** — combines today + tomorrow prices for optimal scheduling across midnight
 - **Monthly EV cost budget** — tracks EV-specific cost and stops when budget is reached
@@ -23,6 +24,7 @@ Smart EV charging automation for Home Assistant using Tibber dynamic pricing, go
 - **Voltage protection** — progressive action on low grid voltage (warn → reduce current → stop)
 - **Force charge override** — manual dashboard toggle to bypass scheduling
 - **Push notifications** — iPhone alerts on charge start/stop, voltage events, car connect/disconnect
+- **Powerline/WiFi flap protection** — debounced car-connected sensor + FRC watchdog prevent ghost connect/disconnect notifications and unintended micro-charges when the go-eCharger WiFi drops out
 - **Range estimation** — shows potential kWh and km based on configured cheap hours and current
 - **Fallback pricing** — if price cache is unavailable, uses current price vs daily average
 
@@ -42,10 +44,15 @@ cd ha-cost-optimized-ev-charging
 
 # 2. Create your .env from the example
 cp .env.example .env
-# Edit .env with your entity IDs (serial, tibber home slug, iphone device name)
+# Edit .env with your entity IDs (serial, tibber home slug, iphone device name).
+# Optional: set HA_CONFIG_SMB_URL for auto-mount and HA_URL + HA_TOKEN for
+# dashboard auto-push (see comments in .env.example).
 
 # 3. Deploy to your HA config volume
-./deploy.sh /Volumes/config   # or wherever your HA config is mounted
+./deploy.sh                   # uses HA_CONFIG_MOUNT from .env (default /Volumes/config)
+./deploy.sh /Volumes/config   # or pass the target explicitly
+./deploy.sh --reload          # deploy + homeassistant.reload_all (if package changed)
+./deploy.sh --restart         # deploy + homeassistant.restart (if package changed)
 
 # 4. Add to configuration.yaml:
 #    homeassistant:
@@ -54,7 +61,13 @@ cp .env.example .env
 
 # 5. Restart Home Assistant
 
-# 6. Create dashboard: paste ev-goe-tibber-dashboard.yaml into a new manual dashboard
+# 6. Dashboard
+#    - If HA_URL + HA_TOKEN are set in .env, deploy.sh auto-pushes the
+#      dashboard via the HA WebSocket API (requires `uv`). Create the target
+#      dashboard once via the HA UI (URL path: ev-charging) — subsequent
+#      deploys keep it in sync.
+#    - Otherwise paste ev-goe-tibber-dashboard.yaml into a new manual
+#      dashboard's raw config editor.
 ```
 
 ## Configuration
@@ -63,9 +76,11 @@ All parameters are adjustable from the HA dashboard at runtime:
 
 | Parameter | Default | Description |
 |---|---|---|
-| Target SoC | 80% | Stop charging when battery reaches this level |
+| Target SoC | 100% | Stop charging when battery reaches this level |
 | Monthly budget | 50 EUR | Max EV charging spend per month |
-| Cheap hours/day | 6 | Maximum cheap hours (actual hours are dynamically calculated from SoC) |
+| Cheap hours/day | 6 | Upper cap on hours charged per day (actual hours are dynamically calculated from SoC, then extended via tolerance) |
+| Cheap price tolerance | 20% | How far above the N-th cheapest hour's price still counts as cheap — catches clustered near-cheap hours |
+| Max price vs daily avg | 0.9 | Hard ceiling: never charge above this fraction of the day's average price, regardless of need or tolerance |
 | Normal current | 10 A | Standard charging current (Schuko) |
 | Safe current | 6 A | Reduced current on low voltage |
 | Voltage warn | 215 V | Notification threshold |
@@ -84,18 +99,35 @@ Prices come from the **official Tibber integration** via `tibber.get_prices` ser
 
 ### Scheduling Logic
 
+The scheduler runs every minute (plus on car connect and price change) and uses a
+**"Natural Cheap Window"** three-layer price threshold:
+
 ```
+1. base     = N-th cheapest price        (N = dynamic hours_needed, capped by cheap_hours setting)
+2. extended = base × (1 + tolerance)      (catches clustered near-cheap hours)
+3. ceiling  = daily_avg × max_vs_avg     (hard safety cap — never above X% of daily average)
+
+final_threshold = min(extended, ceiling)
+```
+
+This approach automatically adapts to the price landscape:
+- **Spiky days** (e.g. cheap valley 0.04 € + peak 0.43 €): tolerance expands around the valley to capture clustered cheap hours.
+- **Flat days** (e.g. all hours 0.25–0.30 €): ceiling clamps the threshold to ~90% of the day's average, preventing pointless charging during expensive hours just because we "need" more.
+
 Every minute (+ on car connect, + on price change):
+```
   1. Read cached hourly prices (today + tomorrow if available)
-  2. Calculate hours needed: (target_soc - current_soc) / 100 × 64.7 kWh / charge_power
-  3. Use min(hours_needed, max_cheap_hours) as effective cheap hours
-  4. Sort combined prices, find threshold for effective cheap hours
-  5. Check: current hour price ≤ threshold?
-  6. Check: SoC < target? (BMW CarData)
-  7. Check: monthly EV cost < budget?
-  8. Check: voltage OK?
-  9. All true → frc=2 (force charge) + iPhone notification
-  10. Any false → frc=1 (force stop) + notification (on transition only)
+  2. Calculate hours_needed: (target_soc - current_soc) / 100 × 64.7 kWh / charge_power
+  3. Compute base threshold = N-th cheapest price (N = min(hours_needed, cheap_hours))
+  4. Compute extended threshold = base × (1 + tolerance)
+  5. Compute ceiling = daily_avg × max_price_vs_avg
+  6. Final threshold = min(extended, ceiling)
+  7. Check: current hour price ≤ final threshold?
+  8. Check: SoC < target? (BMW CarData)
+  9. Check: monthly EV cost < budget?
+  10. Check: voltage OK?
+  11. All true → frc=2 (force charge) + iPhone notification
+  12. Any false → frc=1 (force stop) + notification (on transition only)
 ```
 
 ### Overnight Charging
@@ -117,17 +149,21 @@ The automation always uses `frc=1` to actively prevent charging during expensive
 
 ```
 ├── README.md
-├── .env.example                          # Template for personal config
-├── .gitignore                            # Excludes .env
-├── deploy.sh                             # Generates YAML from templates + .env
+├── .env.example                           # Template for personal config
+├── .gitignore                             # Excludes .env
+├── deploy.sh                              # SMB auto-mount + envsubst + API push
 ├── packages/
-│   └── ev-goe-tibber.yaml.tpl           # HA package template
-└── dashboard/
-    ├── ev-goe-tibber-dashboard.yaml.tpl  # Dashboard template (2 views)
-    └── ev-widget-card.yaml.tpl           # Compact widget for wall displays
+│   └── ev-goe-tibber.yaml.tpl             # HA package template
+├── dashboard/
+│   ├── ev-goe-tibber-dashboard.yaml.tpl   # Dashboard template (2 views)
+│   └── ev-widget-card.yaml.tpl            # Compact widget for wall displays
+└── tools/
+    └── ha_update_dashboard.py             # Lovelace WebSocket API updater (uv run)
 ```
 
 ## Environment Variables (.env)
+
+### Required
 
 | Variable | Example | Description |
 |---|---|---|
@@ -135,6 +171,25 @@ The automation always uses `frc=1` to actively prevent charging during expensive
 | `TIBBER_HOME` | `musterstrasse_1` | Tibber home slug (from `sensor.electricity_price_XXXXX`) |
 | `IPHONE_DEVICE` | `my_iphone` | iPhone device name (from `notify.mobile_app_XXXXX`) |
 | `TIBBER_GRAPH_CAMERA` | `camera.tibber_graph_musterstrasse_1` | Tibber graph camera entity |
+
+### Optional — auto-mount (macOS)
+
+| Variable | Example | Description |
+|---|---|---|
+| `HA_CONFIG_MOUNT` | `/Volumes/config` | Target mount point (also the default deploy target) |
+| `HA_CONFIG_SMB_URL` | `smb://ha@192.168.1.10/config` | SMB URL used to auto-mount via `osascript` when the mount is missing. macOS Keychain supplies the password — mount once manually in Finder with "Remember password". |
+
+### Optional — dashboard auto-push
+
+| Variable | Example | Description |
+|---|---|---|
+| `HA_URL` | `http://192.168.1.10:8123` | HA base URL for the WebSocket API |
+| `HA_TOKEN` | `eyJhbGciOi...` | Long-lived access token (Profile → Security) |
+| `HA_DASHBOARD_URL_PATH` | `ev-charging` | Target dashboard's URL path (default: `ev-charging`) |
+
+When `HA_URL` and `HA_TOKEN` are set, `deploy.sh` pushes the rendered dashboard to HA via the Lovelace WebSocket API (requires [`uv`](https://docs.astral.sh/uv/)). The target dashboard must already exist — create it once via the HA UI.
+
+They also enable the `--reload` / `--restart` flags, which only fire when the generated `ev-goe-tibber.yaml` differs from what's already on disk (use `--force` to bypass the check). Dashboard-only changes are applied in place by the API push — no HA reload needed.
 
 ## Sensors Created
 
@@ -160,6 +215,15 @@ The automation always uses `frc=1` to actively prevent charging during expensive
 | `sensor.ev_tomorrow_expected_price` | Avg price of tomorrow's X cheapest hours |
 | `sensor.ev_monthly_cost_forecast` | Projected monthly cost based on current pace |
 | `sensor.ev_monthly_range_forecast` | Projected monthly range (budget-limited) |
+| `sensor.ev_charge_price_threshold` | **Live threshold** the scheduler compares against. Attributes: `base`, `extended`, `ceiling`, `winner` (which layer is active) |
+| `sensor.ev_charge_daily_avg` | Arithmetic mean of today's hourly prices |
+
+### Flap Protection (Powerline/WiFi)
+
+| Entity | Description |
+|---|---|
+| `binary_sensor.ev_car_connected_stable` | Debounced mirror of `binary_sensor.goe_*_car_0` with `delay_on`/`delay_off` = 1 min + `availability` gating. Notifications trigger on this, not the raw sensor. |
+| `sensor.ev_session_energy_last_known` | Last good `wh` reading while the car is plugged in. Survives transient WiFi outages so disconnect notifications don't show "Session: 0.0 kWh". |
 
 ### Cost & Energy Tracking
 
@@ -189,11 +253,12 @@ The automation always uses `frc=1` to actively prevent charging during expensive
 
 | ID | Trigger | Action |
 |---|---|---|
-| `ev_smart_charge_scheduler` | Every min + car connect + price change | Start/stop based on price + budget + SoC (dynamic hours) |
+| `ev_smart_charge_scheduler` | Every min + car connect + price change | Start/stop based on live price vs threshold + budget + SoC + voltage |
+| `ev_frc_watchdog` | `select.goe_*_frc` transitions to `0` | Re-runs scheduler when the go-eCharger auto-resets `frc` after a Powerline-induced API timeout, preventing unintended charging during Neutral-mode default behaviour |
 | `ev_force_charge_on/off` | Dashboard toggle | Manual override |
 | `ev_voltage_*` | Voltage thresholds | Warn → reduce → stop → restore |
-| `ev_car_connected` | Car plugged in | Notify with price + budget info |
-| `ev_car_disconnected` | Car unplugged | Session log + reset + notify |
+| `ev_car_connected` | Debounced car-plugged (stable for 1 min) | Notify with price + budget info |
+| `ev_car_disconnected` | Debounced car-unplugged (stable for 1 min) | Session log (uses last-known kWh) + reset + notify |
 | `ev_forgot_to_plug_in` | 22:00 daily | Remind if car is home, not plugged in, SoC below target |
 | `ev_monthly_report` | 1st of month, 08:00 | Push summary: kWh, EUR, km, avg price |
 | `ev_ha_start_reset` | HA boot | Reset force charge toggle |
