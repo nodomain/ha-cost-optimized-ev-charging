@@ -33,7 +33,7 @@ card:
     {% set pot_km = states('sensor.ev_potential_range_today') | int(0) %}
     {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | int(0) %}
     {% set range_km = states('sensor.ix1_xdrive30_range_ev_remaining_range') | int(0) %}
-    {% set target_soc = states('input_number.ev_target_soc') | int(80) %}
+    {% set target_soc = states('input_number.ev_target_soc') | int(100) %}
     {# --- Icon --- #}
     {% if voltage_status in ['critical', 'reduce'] %}⚠️
     {% elif force == 'on' %}⚡

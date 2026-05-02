@@ -40,6 +40,38 @@ views:
             tap_action:
               action: toggle
 
+      # --- Smart charging decision widget ------------------------------------
+      # Single-line status showing whether the scheduler considers "now" a
+      # good time to charge, based on the 3-layer Natural Cheap Window
+      # threshold (see sensor.ev_charge_price_threshold attributes).
+      - type: custom:mushroom-template-card
+        primary: >-
+          {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
+          {% set current = states('sensor.electricity_price_${TIBBER_HOME}') | float(0) %}
+          {% if current <= threshold %}
+            Jetzt laden ✓
+          {% else %}
+            Pause — zu teuer
+          {% endif %}
+        secondary: >-
+          {% set current = states('sensor.electricity_price_${TIBBER_HOME}') | float(0) %}
+          {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
+          {% set delta_pct = ((current - threshold) / threshold * 100) | round(0)
+             if threshold > 0 else 0 %}
+          {{ (current * 100) | round(1) }} ct/kWh · Schwelle {{ (threshold * 100) | round(1) }} ct
+          {% if delta_pct > 0 %}· +{{ delta_pct }} %
+          {% elif delta_pct < 0 %}· {{ delta_pct }} %
+          {% endif %}
+        icon: >-
+          {% set current = states('sensor.electricity_price_${TIBBER_HOME}') | float(0) %}
+          {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
+          {{ 'mdi:flash' if current <= threshold else 'mdi:flash-off-outline' }}
+        icon_color: >-
+          {% set current = states('sensor.electricity_price_${TIBBER_HOME}') | float(0) %}
+          {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
+          {{ 'green' if current <= threshold else 'red' }}
+        fill_container: true
+
       # --- Charger status ---
       - type: entities
         title: "🔌 Charger"
@@ -142,6 +174,8 @@ views:
             name: Cheap hours per day
           - entity: input_number.ev_cheap_price_tolerance
             name: Cheap price tolerance
+          - entity: input_number.ev_max_price_vs_avg
+            name: Max price vs daily avg
 
       # --- Live Info ---
       - type: entities

@@ -82,9 +82,9 @@ input_number:
     max: 100
     step: 5
     unit_of_measurement: "%"
-    icon: mdi:battery-charging-80
+    icon: mdi:battery-charging-100
     mode: slider
-    initial: 80
+    initial: 100
 
   # --- Voltage protection thresholds ---
   ev_voltage_warn:
@@ -119,16 +119,32 @@ input_number:
 
   ev_cheap_price_tolerance:
     name: "EV cheap price tolerance"
-    # Hours whose price is within this % above the top-N threshold also
-    # count as cheap. Prevents arbitrary exclusion of near-threshold hours
-    # in flat price valleys (e.g. 0.1797 ct vs 0.1783 ct cutoff).
+    # Extends the top-N cheapest threshold upward by this percentage to
+    # catch clustered near-cheap hours. E.g. tolerance=20% means any hour
+    # within 20% above the N-th cheapest price is considered cheap.
+    # Counterbalanced by ev_max_price_vs_avg (hard ceiling).
     min: 0
-    max: 20
-    step: 0.5
+    max: 100
+    step: 1
     unit_of_measurement: "%"
     icon: mdi:plus-minus-variant
     mode: box
-    initial: 3
+    initial: 20
+
+  ev_max_price_vs_avg:
+    name: "EV max price vs daily avg"
+    # Hard upper cap for the charging threshold, expressed as a fraction of
+    # the day's average price. 0.9 means: never charge above 90% of daily
+    # average, even if tolerance or hours_needed would suggest otherwise.
+    # This is the "natural cheap window" safety limit — ensures we never
+    # pay above-average prices while hamstering cheap energy.
+    # 1.0 disables the cap (classic behaviour).
+    min: 0.5
+    max: 1.2
+    step: 0.05
+    icon: mdi:chart-bell-curve
+    mode: slider
+    initial: 0.9
 
 # =============================================================================
 # TEMPLATE SENSORS
@@ -226,6 +242,98 @@ template:
           {{ has_value('sensor.ev_charging_cost_monthly')
              and has_value('sensor.ev_energy_monthly') }}
 
+      # --- Widget support sensors: expose scheduler's threshold + daily avg ---
+      # Used by the "Smart Charging Decision" widget to visualise the same
+      # price threshold the scheduler applies, without duplicating the
+      # 3-layer calculation inline in the dashboard YAML.
+      - name: "EV charge daily avg"
+        unique_id: ev_charge_daily_avg
+        unit_of_measurement: "EUR/kWh"
+        icon: mdi:chart-line-variant
+        state: >-
+          {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
+          {% if raw is not none and raw | length > 0 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {{ (prices | sum / prices | length) | round(4) }}
+          {% else %}
+            {{ 0 }}
+          {% endif %}
+        availability: >-
+          {{ state_attr('sensor.ev_price_cache', 'today') is not none }}
+
+      - name: "EV charge price threshold"
+        unique_id: ev_charge_price_threshold
+        unit_of_measurement: "EUR/kWh"
+        icon: mdi:ruler
+        state: >-
+          {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
+          {% if raw is none or raw | length == 0 %}
+            {{ 0 }}
+          {% else %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+            {% set sorted = prices | sort %}
+            {% set base = sorted[hours - 1] if prices | length >= hours else 999 %}
+            {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
+            {% set extended = base + (base | abs) * tol %}
+            {% set avg = prices | sum / prices | length %}
+            {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
+            {% set ceiling = avg * cap_factor %}
+            {{ [extended, ceiling] | min | round(4) }}
+          {% endif %}
+        attributes:
+          # Surface all three layers so the widget can show which won.
+          base: >-
+            {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
+            {% if raw is none or raw | length == 0 %}
+              0
+            {% else %}
+              {% set prices = raw | map(attribute='total') | list %}
+              {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+              {% set sorted = prices | sort %}
+              {{ (sorted[hours - 1] if prices | length >= hours else 0) | round(4) }}
+            {% endif %}
+          extended: >-
+            {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
+            {% if raw is none or raw | length == 0 %}
+              0
+            {% else %}
+              {% set prices = raw | map(attribute='total') | list %}
+              {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+              {% set sorted = prices | sort %}
+              {% set base = sorted[hours - 1] if prices | length >= hours else 0 %}
+              {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
+              {{ (base + (base | abs) * tol) | round(4) }}
+            {% endif %}
+          ceiling: >-
+            {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
+            {% if raw is none or raw | length == 0 %}
+              0
+            {% else %}
+              {% set prices = raw | map(attribute='total') | list %}
+              {% set avg = prices | sum / prices | length %}
+              {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
+              {{ (avg * cap_factor) | round(4) }}
+            {% endif %}
+          winner: >-
+            {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
+            {% if raw is none or raw | length == 0 %}
+              none
+            {% else %}
+              {% set prices = raw | map(attribute='total') | list %}
+              {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
+              {% set sorted = prices | sort %}
+              {% set base = sorted[hours - 1] if prices | length >= hours else 0 %}
+              {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
+              {% set extended = base + (base | abs) * tol %}
+              {% set avg = prices | sum / prices | length %}
+              {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
+              {% set ceiling = avg * cap_factor %}
+              {{ 'tolerance' if extended <= ceiling else 'ceiling' }}
+            {% endif %}
+        availability: >-
+          {{ state_attr('sensor.ev_price_cache', 'today') is not none }}
+
       - name: "EV expected price today"
         unique_id: ev_expected_price_today
         unit_of_measurement: "EUR/kWh"
@@ -235,7 +343,7 @@ template:
           {% if raw is not none and raw | length > 0 %}
             {% set prices = raw | map(attribute='total') | list %}
             {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+            {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
             {% if prices | length >= hours %}
               {% set base = (prices | sort)[hours - 1] %}
               {% set threshold = base + (base | abs) * tol %}
@@ -258,7 +366,7 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
           {% set current_hour = now().hour %}
           {% set remaining_prices = prices[current_hour:] %}
           {% set sorted_all = prices | sort %}
@@ -280,7 +388,7 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
           {% set current_hour = now().hour %}
           {% set remaining_prices = prices[current_hour:] %}
           {% set sorted_all = prices | sort %}
@@ -304,7 +412,7 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
           {% set current_hour = now().hour %}
           {% set remaining_prices = prices[current_hour:] %}
           {% set sorted_all = prices | sort %}
@@ -322,7 +430,7 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'tomorrow') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
           {% set sorted = prices | sort %}
           {% set base = sorted[hours - 1] %}
           {% set threshold = base + (base | abs) * tol %}
@@ -345,7 +453,7 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'tomorrow') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
           {% set sorted = prices | sort %}
           {% set base = sorted[hours - 1] %}
           {% set threshold = base + (base | abs) * tol %}
@@ -362,7 +470,7 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
           {% set current_hour = now().hour %}
           {% set sorted_all = prices | sort %}
           {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
@@ -429,7 +537,7 @@ template:
         icon: mdi:clock-check-outline
         state: >-
           {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
-          {% set target = states('input_number.ev_target_soc') | float(80) %}
+          {% set target = states('input_number.ev_target_soc') | float(100) %}
           {% set capacity_kwh = 64.7 %}
           {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
           {% set kwh_needed = (target - soc) / 100 * capacity_kwh %}
@@ -464,7 +572,7 @@ template:
         icon: mdi:clock-end
         state: >-
           {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
-          {% set target = states('input_number.ev_target_soc') | float(80) %}
+          {% set target = states('input_number.ev_target_soc') | float(100) %}
           {% set capacity_kwh = 64.7 %}
           {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
           {% set kwh_needed = (target - soc) / 100 * capacity_kwh %}
@@ -482,7 +590,7 @@ template:
               {% set tomorrow_available = prices_tomorrow | length >= 24 %}
               {% set combined = prices_today + prices_tomorrow %}
               {% set max_hours = states('input_number.ev_cheap_hours') | int(6) %}
-              {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
+              {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
               {% set sorted_all = combined | sort %}
               {% if sorted_all | length >= max_hours and combined | length > now().hour %}
                 {% set base = sorted_all[max_hours - 1] %}
@@ -577,6 +685,62 @@ template:
              and states('sensor.voltage_phase1_${TIBBER_HOME}') | float(0) > 0 }}
         availability: >-
           {{ has_value('sensor.voltage_phase1_${TIBBER_HOME}') }}
+
+  # --- Debounced car-connected state: filters out WiFi flaps via Powerline ---
+  # The go-eCharger is reached via a FritzPowerline link which occasionally
+  # drops for a few seconds. Triggering notifications directly on
+  # binary_sensor.goe_..._car_0 causes ghost "connected/disconnected" pairs
+  # every time the link flaps.
+  #
+  # This is a state-based (not trigger-based) template binary sensor so it
+  # evaluates continuously. delay_on / delay_off provide the debouncing —
+  # a transient transition that reverts within 60 seconds never propagates.
+  # availability gates the sensor on a definite source state, so that
+  # unknown/unavailable moments during a reconnect surface as "unavailable"
+  # on the stable sensor (instead of flipping to "off"). Automations that
+  # trigger on explicit from: "on" / from: "off" thus ignore reconnect
+  # transitions entirely.
+  - binary_sensor:
+      - name: "EV car connected (stable)"
+        unique_id: ev_car_connected_stable
+        device_class: plug
+        state: "{{ is_state('binary_sensor.goe_${GOE_SERIAL}_car_0', 'on') }}"
+        availability: >-
+          {{ has_value('binary_sensor.goe_${GOE_SERIAL}_car_0') }}
+        delay_on: "00:01:00"
+        delay_off: "00:01:00"
+
+  # --- Last-known session energy: holds the most recent valid wh reading ---
+  # When the Powerline link drops, sensor.goe_..._wh goes to 'unknown', which
+  # made the disconnect notification render "Session: 0.0 kWh". This
+  # trigger-based sensor only updates on transitions to real numeric values,
+  # so it keeps the last good kWh reading available for the disconnect
+  # summary even if the charger is briefly unreachable at notification time.
+  #
+  # Additional guard: only update while a car is actually plugged in. This
+  # protects against wh being reported as 0 between sessions (go-e behaviour
+  # may differ across firmwares) — without the guard, the disconnect
+  # notification could race against a wh→0 reset and still show 0.0 kWh
+  # despite real session energy.
+  - triggers:
+      - trigger: state
+        entity_id: sensor.goe_${GOE_SERIAL}_wh
+        not_to:
+          - unknown
+          - unavailable
+          - none
+    conditions:
+      - condition: state
+        entity_id: binary_sensor.goe_${GOE_SERIAL}_car_0
+        state: "on"
+    sensor:
+      - name: "EV session energy (last known)"
+        unique_id: ev_session_energy_last_known
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        icon: mdi:ev-plug-type2
+        state: "{{ states('sensor.goe_${GOE_SERIAL}_wh') | float(0) | round(3) }}"
 
 # =============================================================================
 # INTEGRATION SENSOR — Riemann sum for accumulated EV cost
@@ -682,7 +846,7 @@ automation:
           cheap_hours: >-
             {% set max_hours = states('input_number.ev_cheap_hours') | int(6) %}
             {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
-            {% set target = states('input_number.ev_target_soc') | float(80) %}
+            {% set target = states('input_number.ev_target_soc') | float(100) %}
             {% set capacity_kwh = 64.7 %}
             {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
             {% set kwh_needed = (target - soc) / 100 * capacity_kwh %}
@@ -699,16 +863,45 @@ automation:
             {{ prices_today + prices_tomorrow if prices_tomorrow | length >= 24 else prices_today }}
           sorted_prices: >-
             {{ combined_prices | sort if combined_prices | length > 0 else [] }}
+          # "Natural cheap window" threshold
+          # ------------------------------------------------------------------
+          # Three-layer computation:
+          #   1. base:     N-th cheapest price (N = hours_needed, capped at
+          #                max_hours as a hard per-day upper bound).
+          #   2. extended: base × (1 + tolerance) — grabs clustered near-
+          #                cheap hours just above the strict cutoff.
+          #   3. ceiling:  daily_avg × max_price_vs_avg — hard safety cap
+          #                so we never charge above a fraction of the
+          #                day's average, even if need/tolerance suggest it.
+          # final = min(extended, ceiling). When ev_max_price_vs_avg is
+          # set to ≥1.0, the ceiling is effectively disabled.
+          daily_avg: >-
+            {{ (combined_prices | sum) / (combined_prices | length)
+               if combined_prices | length > 0 else 0 }}
           price_threshold: >-
             {% set base = sorted_prices[cheap_hours - 1]
                if sorted_prices | length >= cheap_hours
                else 999 %}
-            {% set tol = states('input_number.ev_cheap_price_tolerance') | float(3) / 100 %}
-            {{ base + (base | abs) * tol }}
+            {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
+            {% set extended = base + (base | abs) * tol %}
+            {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
+            {% set ceiling = daily_avg * cap_factor if daily_avg > 0 else 999 %}
+            {{ [extended, ceiling] | min }}
           current_price: >-
-            {{ prices_today[current_hour | int]
-               if prices_today | length > current_hour | int
-               else states('sensor.electricity_price_${TIBBER_HOME}') | float(999) }}
+            {# Always use the live Tibber sensor — it reflects the active
+               15-minute slot, while prices_today is only a 1-per-hour
+               sample and can be wildly off inside an hour. The hourly
+               cache stays authoritative for threshold computation (we
+               need a per-hour estimate there), but the "is now cheap?"
+               decision must use the actual current price. #}
+            {% set live = states('sensor.electricity_price_${TIBBER_HOME}') | float(-1) %}
+            {% if live >= 0 %}
+              {{ live }}
+            {% elif prices_today | length > current_hour | int %}
+              {{ prices_today[current_hour | int] }}
+            {% else %}
+              999
+            {% endif %}
           voltage_ok: >-
             {{ states('sensor.voltage_phase1_${TIBBER_HOME}') | float(0)
                > states('input_number.ev_voltage_reduce') | float(210) }}
@@ -721,7 +914,7 @@ automation:
             {{ current <= avg and not budget_exceeded and voltage_ok }}
           soc_ok: >-
             {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
-            {% set target = states('input_number.ev_target_soc') | float(80) %}
+            {% set target = states('input_number.ev_target_soc') | float(100) %}
             {{ soc < target }}
           should_charge: >-
             {% if has_price_data %}
@@ -975,7 +1168,8 @@ automation:
     alias: "EV: Car connected notification"
     triggers:
       - trigger: state
-        entity_id: binary_sensor.goe_${GOE_SERIAL}_car_0
+        entity_id: binary_sensor.ev_car_connected_stable
+        from: "off"
         to: "on"
     actions:
       - action: notify.mobile_app_${IPHONE_DEVICE}
@@ -991,13 +1185,14 @@ automation:
     alias: "EV: Car disconnected notification"
     triggers:
       - trigger: state
-        entity_id: binary_sensor.goe_${GOE_SERIAL}_car_0
+        entity_id: binary_sensor.ev_car_connected_stable
+        from: "on"
         to: "off"
     actions:
       - variables:
-          session_kwh: "{{ states('sensor.goe_${GOE_SERIAL}_wh') | float(0) | round(2) }}"
+          session_kwh: "{{ states('sensor.ev_session_energy_last_known') | float(0) | round(2) }}"
           session_cost: >-
-            {% set kwh = states('sensor.goe_${GOE_SERIAL}_wh') | float(0) %}
+            {% set kwh = states('sensor.ev_session_energy_last_known') | float(0) %}
             {% set avg = states('sensor.ev_average_price_per_kwh_monthly') | float(0.20) %}
             {{ (kwh * avg) | round(2) }}
           monthly_total_kwh: "{{ states('sensor.ev_energy_monthly') | float(0) | round(1) }}"
@@ -1026,6 +1221,49 @@ automation:
           monthly_cost_eur: "{{ monthly_total_cost }}"
           timestamp: "{{ now().isoformat() }}"
     mode: single
+
+  # -------------------------------------------------------------------------
+  # FRC WATCHDOG: re-apply desired state after charger-side safety reset
+  # -------------------------------------------------------------------------
+  # Root cause: the go-eCharger has a safety timeout. When it loses API contact
+  # with HA (Powerline WiFi flap), it resets frc (force state) from 1 (OFF)
+  # back to 0 (Neutral) after ~60-90s — a deliberate feature to prevent a
+  # crashed controller from permanently blocking the charger.
+  #
+  # Consequence: on reconnect we see frc=0 and, in Neutral mode with a car
+  # plugged in, the charger starts drawing ~2 kW until the scheduler's next
+  # tick re-applies frc=1. Each flap leaked ~0.03 kWh.
+  #
+  # Fix: trigger instantly on frc → 0 (including unknown → 0 reconnect events),
+  # but only when a car is actually plugged in AND we did not deliberately set
+  # frc=0 ourselves (disconnect notification does that, but then the car is
+  # already unplugged so the condition filters it out). Re-run the scheduler
+  # to restore the correct state. Race window shrinks from ~3s to ~1s.
+  - id: ev_frc_watchdog
+    alias: "EV: FRC watchdog (re-apply state after charger reset)"
+    description: >-
+      Protects against the go-eCharger's safety-timeout behaviour that resets
+      frc to 0 (Neutral) when WiFi to HA drops out. Triggers on frc→0 while
+      the car is plugged in and re-runs the smart-charge scheduler.
+    triggers:
+      - trigger: state
+        entity_id: select.goe_${GOE_SERIAL}_frc
+        to: "0"
+    conditions:
+      # Only care about resets while a car is actually plugged in.
+      # When the car is unplugged, ev_car_disconnected legitimately sets frc=0.
+      - condition: state
+        entity_id: binary_sensor.goe_${GOE_SERIAL}_car_0
+        state: "on"
+    actions:
+      - action: automation.trigger
+        target:
+          # Entity ID is slugified from the alias, NOT from the `id:` field.
+          # alias "EV: Smart charge during cheapest hours" → this entity_id.
+          entity_id: automation.ev_smart_charge_during_cheapest_hours
+        data:
+          skip_condition: true
+    mode: restart
 
   # -------------------------------------------------------------------------
   # SAFETY: reset frc to neutral on HA start
