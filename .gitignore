@@ -11,3 +11,7 @@ scripts/
 
 # Personal config (contains entity IDs with address/serial)
 .env
+
+# Python bytecode caches (from test compilation of tools/*.py)
+__pycache__/
+*.pyc
