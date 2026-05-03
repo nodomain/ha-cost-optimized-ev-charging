@@ -312,6 +312,99 @@ They also enable the `--reload` / `--restart` flags, which only fire when the ge
 
 ## Automations
 
+### Smart Charging Scheduler
+
+The main brain — runs every minute. See [Scheduler Decision Flow](#scheduler-decision-flow) above for details.
+
+### Force Charge Override
+
+```mermaid
+flowchart LR
+    on["Toggle ON"] --> car_on{Car\nconnected?}
+    car_on -- Yes --> frc2["frc=2 + set amps\n+ notify ⚡"]
+    car_on -- No --> skip1([Skip])
+    off["Toggle OFF"] --> frc0["frc=0\n+ notify ℹ️"]
+
+    style frc2 fill:#2d6a2d,color:#fff
+    style frc0 fill:#555,color:#fff
+```
+
+### Voltage Protection
+
+Progressive response chain — each stage triggers independently based on voltage thresholds:
+
+```mermaid
+flowchart TD
+    voltage["Grid voltage L1"] --> warn{"V ≤ warn\nfor 2 min?"}
+    warn -- Yes --> notify_warn["⚠️ Notify\n(warning only)"]
+    voltage --> reduce{"V ≤ reduce\nfor 30s?"}
+    reduce -- Yes --> check_amp{Current >\nsafe level?}
+    check_amp -- Yes --> reduce_amp["⚠️ Reduce to safe amps\n+ notify"]
+    check_amp -- No --> skip_reduce([Already reduced])
+    voltage --> crit{"V ≤ stop\nfor 20s?"}
+    crit -- Yes --> force_stop["🚨 frc=1 force stop\n+ critical notify"]
+    voltage --> recover{"V > warn\nfor 3 min?"}
+    recover -- Yes --> enabled{Smart charging\nenabled?}
+    enabled -- Yes --> restore["✅ Restore normal amps"]
+    enabled -- No --> skip_restore([Skip])
+
+    style notify_warn fill:#b8860b,color:#fff
+    style reduce_amp fill:#b8860b,color:#fff
+    style force_stop fill:#8b1a1a,color:#fff
+    style restore fill:#2d6a2d,color:#fff
+```
+
+### Car Connect / Disconnect
+
+Uses debounced `ev_car_connected_stable` (1 min delay) to filter Powerline WiFi flaps:
+
+```mermaid
+flowchart LR
+    plug["🔌 Car plugged in\n(stable 1 min)"] --> notify_on["🔌 Notify\nprice + budget info"]
+    unplug["🔌 Car unplugged\n(stable 1 min)"] --> summary["Log session\nenergy + cost"]
+    summary --> reset["frc=0\nforce charge OFF"]
+    reset --> notify_off["🔌 Notify\nsession summary"]
+    reset --> event["Fire HA event\nev_charging_session_complete"]
+
+    style notify_on fill:#1a5276,color:#fff
+    style notify_off fill:#1a5276,color:#fff
+```
+
+### FRC Watchdog
+
+Protects against the go-eCharger resetting `frc` to Neutral after WiFi drops:
+
+```mermaid
+flowchart LR
+    reset["frc → 0\n(charger safety reset)"] --> car{Car\nplugged in?}
+    car -- Yes --> rerun["🔄 Re-run scheduler\n(skip conditions)"]
+    car -- No --> ignore([Ignore \u2014 legitimate\ndisconnect reset])
+
+    style rerun fill:#b8860b,color:#fff
+    style ignore fill:#555,color:#fff
+```
+
+### Safety & Reminders
+
+```mermaid
+flowchart TD
+    ha_start["HA boot"] --> delay["Wait 30s"] --> reset_toggle["Turn off\nforce charge toggle"]
+    time_22["🕙 22:00 daily"] --> home{Car home?}
+    home -- Yes --> plugged{Plugged in?}
+    plugged -- No --> low_soc{SoC < target?}
+    low_soc -- Yes --> remind["🔋 Notify\nEinstecken vergessen?"]
+    low_soc -- No --> skip1([Skip])
+    plugged -- Yes --> skip2([Skip])
+    home -- No --> skip3([Skip])
+    first["📅 1st of month 08:00"] --> report["📊 Monthly report\nkWh + EUR + km + avg price"]
+
+    style remind fill:#b8860b,color:#fff
+    style report fill:#1a5276,color:#fff
+    style reset_toggle fill:#555,color:#fff
+```
+
+### All Automations (Reference)
+
 | ID | Trigger | Action |
 |---|---|---|
 | `ev_smart_charge_scheduler` | Every min + car connect + price change | Start/stop based on live price vs threshold + budget + SoC + voltage |
