@@ -96,32 +96,21 @@ All parameters are adjustable from the HA dashboard at runtime:
 flowchart TD
     trigger["⏱️ Trigger\n(every minute / car plugged in / price change)"]
     trigger --> cond_enabled{Smart charging\nenabled?}
-    cond_enabled -- No --> idle([Do nothing])
+    cond_enabled -- No --> skip1([Skip])
     cond_enabled -- Yes --> cond_force{Force charge\noverride?}
-    cond_force -- Yes --> idle
+    cond_force -- Yes --> skip2([Skip])
     cond_force -- No --> cond_car{Car\nconnected?}
-    cond_car -- No --> idle
-    cond_car -- Yes --> calc_hours["Calculate hours_needed\n(SoC chain → kWh → hours)"]
-    calc_hours --> calc_threshold["Calculate price threshold\n(3-layer: base → extended → ceiling)"]
-    calc_threshold --> gather{"Gather checks"}
-    gather --> check_price{Current price\n≤ threshold?}
-    gather --> check_soc{SoC\n< target?}
-    gather --> check_budget{Monthly cost\n< budget?}
-    gather --> check_voltage{Voltage\nOK?}
-    check_price -- No --> stop
-    check_soc -- No --> stop
-    check_budget -- No --> stop
-    check_voltage -- No --> stop
-    check_price -- Yes --> all_ok
-    check_soc -- Yes --> all_ok
-    check_budget -- Yes --> all_ok
-    check_voltage -- Yes --> all_ok
-    all_ok{All checks\npassed?} -- Yes --> charge["🟢 frc=2\nForce charge + notify"]
-    all_ok -- No --> stop["🔴 frc=1\nForce stop + notify"]
+    cond_car -- No --> skip3([Skip])
+    cond_car -- Yes --> calc["Calculate hours_needed\n+ price threshold"]
+    calc --> checks{"price ≤ threshold?\nSoC < target?\nbudget OK?\nvoltage OK?"}
+    checks -- All true --> charge["🟢 frc=2 — charge + notify"]
+    checks -- Any false --> stop["🔴 frc=1 — stop + notify"]
 
     style charge fill:#2d6a2d,color:#fff
     style stop fill:#8b1a1a,color:#fff
-    style idle fill:#555,color:#fff
+    style skip1 fill:#555,color:#fff
+    style skip2 fill:#555,color:#fff
+    style skip3 fill:#555,color:#fff
 ```
 
 ### Three-Layer Price Threshold
