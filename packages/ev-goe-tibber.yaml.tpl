@@ -256,6 +256,9 @@ template:
           {% else %}
             0
           {% endif %}
+        availability: >-
+          {{ has_value('input_number.ev_target_soc')
+             and has_value('input_number.ev_current_normal') }}
 
       # --- Widget support sensors: expose scheduler's threshold + daily avg ---
       # Used by the "Smart Charging Decision" widget to visualise the same
@@ -267,14 +270,11 @@ template:
         icon: mdi:chart-line-variant
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {% if raw is not none and raw | length > 0 %}
-            {% set prices = raw | map(attribute='total') | list %}
-            {{ (prices | sum / prices | length) | round(4) }}
-          {% else %}
-            {{ 0 }}
-          {% endif %}
+          {% set prices = raw | map(attribute='total') | list %}
+          {{ (prices | sum / prices | length) | round(4) }}
         availability: >-
-          {{ state_attr('sensor.ev_price_cache', 'today') is not none }}
+          {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
+          {{ raw is not none and raw | length > 0 }}
 
       - name: "EV charge price threshold"
         unique_id: ev_charge_price_threshold
@@ -770,7 +770,9 @@ sensor:
     unique_id: ev_charging_cost_total
     unit_prefix: ~
     unit_time: h
-    method: left
+    method: trapezoidal
+    max_sub_interval:
+      minutes: 5
     round: 2
 
 # =============================================================================
@@ -832,7 +834,7 @@ automation:
       demand and a three-layer price threshold (base + spread × tolerance,
       capped by ceiling). Stops when budget is exceeded or target SoC reached.
       Uses frc=2 to force-start and frc=1 to force-stop.
-    mode: single
+    mode: restart
     triggers:
       - trigger: time_pattern
         minutes: "/1"
