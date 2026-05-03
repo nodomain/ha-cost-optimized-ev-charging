@@ -44,15 +44,6 @@ input_number:
     mode: slider
     initial: 50
 
-  ev_cheap_hours:
-    name: "EV cheap hours to charge per day"
-    min: 1
-    max: 12
-    step: 1
-    icon: mdi:clock-outline
-    mode: slider
-    initial: 6
-
   # --- Charging current ---
   ev_current_safe:
     name: "EV safe current (reduced)"
@@ -228,7 +219,8 @@ template:
           {{ (power_w / 1000 * price) | round(3) }}
         availability: >-
           {{ has_value('sensor.goe_${GOE_SERIAL}_nrg_11')
-             and has_value('sensor.electricity_price_${TIBBER_HOME}') }}
+             and has_value('sensor.electricity_price_${TIBBER_HOME}')
+             and states('sensor.goe_${GOE_SERIAL}_nrg_11') not in ['unknown', 'unavailable'] }}
 
       - name: "EV average price per kWh monthly"
         unique_id: ev_avg_price_kwh_monthly
@@ -241,6 +233,29 @@ template:
         availability: >-
           {{ has_value('sensor.ev_charging_cost_monthly')
              and has_value('sensor.ev_energy_monthly') }}
+
+      - name: "EV hours needed"
+        unique_id: ev_hours_needed
+        unit_of_measurement: "h"
+        icon: mdi:clock-check-outline
+        state: >-
+          {% set live_soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') %}
+          {% set last_soc = states('sensor.ev_last_known_soc') %}
+          {% if live_soc not in ['unknown', 'unavailable', 'none', ''] %}
+            {% set soc = live_soc | float(50) %}
+          {% elif last_soc not in ['unknown', 'unavailable', 'none', ''] %}
+            {% set soc = last_soc | float(50) %}
+          {% else %}
+            {% set soc = 50 %}
+          {% endif %}
+          {% set target = states('input_number.ev_target_soc') | float(100) %}
+          {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
+          {% set kwh_needed = (target - soc) / 100 * 64.7 %}
+          {% if kwh_needed > 0 and power_kw > 0 %}
+            {{ (kwh_needed / power_kw) | round(0, 'ceil') | int }}
+          {% else %}
+            0
+          {% endif %}
 
       # --- Widget support sensors: expose scheduler's threshold + daily avg ---
       # Used by the "Smart Charging Decision" widget to visualise the same
@@ -266,69 +281,94 @@ template:
         unit_of_measurement: "EUR/kWh"
         icon: mdi:ruler
         state: >-
-          {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {% if raw is none or raw | length == 0 %}
+          {% set raw_today = state_attr('sensor.ev_price_cache', 'today') %}
+          {% if raw_today is none or raw_today | length == 0 %}
             {{ 0 }}
           {% else %}
-            {% set prices = raw | map(attribute='total') | list %}
-            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set sorted = prices | sort %}
-            {% set base = sorted[hours - 1] if prices | length >= hours else 999 %}
+            {% set prices_today = raw_today | map(attribute='total') | list %}
+            {% set raw_tomorrow = state_attr('sensor.ev_price_cache', 'tomorrow') %}
+            {% set prices_tomorrow = raw_tomorrow | map(attribute='total') | list if raw_tomorrow is not none and raw_tomorrow | length >= 24 else [] %}
+            {% set combined = prices_today + prices_tomorrow %}
+            {% set future = combined[now().hour:] if combined | length > now().hour else combined %}
+            {% set hours = states('sensor.ev_hours_needed') | int(6) %}
+            {% set hours = [hours, 1] | max %}
+            {% set sorted = future | sort %}
+            {% set base = sorted[[hours - 1, sorted | length - 1] | min] %}
+            {% set spread = (sorted | last - sorted | first) if sorted | length > 1 else 0.01 %}
             {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
-            {% set extended = base + (base | abs) * tol %}
-            {% set avg = prices | sum / prices | length %}
+            {% set extended = base + spread * tol %}
+            {% set avg = future | sum / future | length if future | length > 0 else 0 %}
             {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
-            {% set ceiling = avg * cap_factor %}
+            {% set ceiling = avg * cap_factor if avg > 0 else 999 %}
             {{ [extended, ceiling] | min | round(4) }}
           {% endif %}
         attributes:
-          # Surface all three layers so the widget can show which won.
+          hours_needed: >-
+            {{ states('sensor.ev_hours_needed') | int(0) }}
           base: >-
-            {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-            {% if raw is none or raw | length == 0 %}
+            {% set raw_today = state_attr('sensor.ev_price_cache', 'today') %}
+            {% if raw_today is none or raw_today | length == 0 %}
               0
             {% else %}
-              {% set prices = raw | map(attribute='total') | list %}
-              {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-              {% set sorted = prices | sort %}
-              {{ (sorted[hours - 1] if prices | length >= hours else 0) | round(4) }}
+              {% set prices_today = raw_today | map(attribute='total') | list %}
+              {% set raw_tomorrow = state_attr('sensor.ev_price_cache', 'tomorrow') %}
+              {% set prices_tomorrow = raw_tomorrow | map(attribute='total') | list if raw_tomorrow is not none and raw_tomorrow | length >= 24 else [] %}
+              {% set combined = prices_today + prices_tomorrow %}
+              {% set future = combined[now().hour:] if combined | length > now().hour else combined %}
+              {% set hours = [states('sensor.ev_hours_needed') | int(6), 1] | max %}
+              {% set sorted = future | sort %}
+              {{ sorted[[hours - 1, sorted | length - 1] | min] | round(4) }}
             {% endif %}
           extended: >-
-            {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-            {% if raw is none or raw | length == 0 %}
+            {% set raw_today = state_attr('sensor.ev_price_cache', 'today') %}
+            {% if raw_today is none or raw_today | length == 0 %}
               0
             {% else %}
-              {% set prices = raw | map(attribute='total') | list %}
-              {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-              {% set sorted = prices | sort %}
-              {% set base = sorted[hours - 1] if prices | length >= hours else 0 %}
+              {% set prices_today = raw_today | map(attribute='total') | list %}
+              {% set raw_tomorrow = state_attr('sensor.ev_price_cache', 'tomorrow') %}
+              {% set prices_tomorrow = raw_tomorrow | map(attribute='total') | list if raw_tomorrow is not none and raw_tomorrow | length >= 24 else [] %}
+              {% set combined = prices_today + prices_tomorrow %}
+              {% set future = combined[now().hour:] if combined | length > now().hour else combined %}
+              {% set hours = [states('sensor.ev_hours_needed') | int(6), 1] | max %}
+              {% set sorted = future | sort %}
+              {% set base = sorted[[hours - 1, sorted | length - 1] | min] %}
+              {% set spread = (sorted | last - sorted | first) if sorted | length > 1 else 0.01 %}
               {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
-              {{ (base + (base | abs) * tol) | round(4) }}
+              {{ (base + spread * tol) | round(4) }}
             {% endif %}
           ceiling: >-
-            {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-            {% if raw is none or raw | length == 0 %}
+            {% set raw_today = state_attr('sensor.ev_price_cache', 'today') %}
+            {% if raw_today is none or raw_today | length == 0 %}
               0
             {% else %}
-              {% set prices = raw | map(attribute='total') | list %}
-              {% set avg = prices | sum / prices | length %}
+              {% set prices_today = raw_today | map(attribute='total') | list %}
+              {% set raw_tomorrow = state_attr('sensor.ev_price_cache', 'tomorrow') %}
+              {% set prices_tomorrow = raw_tomorrow | map(attribute='total') | list if raw_tomorrow is not none and raw_tomorrow | length >= 24 else [] %}
+              {% set combined = prices_today + prices_tomorrow %}
+              {% set future = combined[now().hour:] if combined | length > now().hour else combined %}
+              {% set avg = future | sum / future | length if future | length > 0 else 0 %}
               {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
               {{ (avg * cap_factor) | round(4) }}
             {% endif %}
           winner: >-
-            {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-            {% if raw is none or raw | length == 0 %}
+            {% set raw_today = state_attr('sensor.ev_price_cache', 'today') %}
+            {% if raw_today is none or raw_today | length == 0 %}
               none
             {% else %}
-              {% set prices = raw | map(attribute='total') | list %}
-              {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-              {% set sorted = prices | sort %}
-              {% set base = sorted[hours - 1] if prices | length >= hours else 0 %}
+              {% set prices_today = raw_today | map(attribute='total') | list %}
+              {% set raw_tomorrow = state_attr('sensor.ev_price_cache', 'tomorrow') %}
+              {% set prices_tomorrow = raw_tomorrow | map(attribute='total') | list if raw_tomorrow is not none and raw_tomorrow | length >= 24 else [] %}
+              {% set combined = prices_today + prices_tomorrow %}
+              {% set future = combined[now().hour:] if combined | length > now().hour else combined %}
+              {% set hours = [states('sensor.ev_hours_needed') | int(6), 1] | max %}
+              {% set sorted = future | sort %}
+              {% set base = sorted[[hours - 1, sorted | length - 1] | min] %}
+              {% set spread = (sorted | last - sorted | first) if sorted | length > 1 else 0.01 %}
               {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
-              {% set extended = base + (base | abs) * tol %}
-              {% set avg = prices | sum / prices | length %}
+              {% set extended = base + spread * tol %}
+              {% set avg = future | sum / future | length if future | length > 0 else 0 %}
               {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
-              {% set ceiling = avg * cap_factor %}
+              {% set ceiling = avg * cap_factor if avg > 0 else 999 %}
               {{ 'tolerance' if extended <= ceiling else 'ceiling' }}
             {% endif %}
         availability: >-
@@ -342,21 +382,15 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% if raw is not none and raw | length > 0 %}
             {% set prices = raw | map(attribute='total') | list %}
-            {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
-            {% if prices | length >= hours %}
-              {% set base = (prices | sort)[hours - 1] %}
-              {% set threshold = base + (base | abs) * tol %}
-              {% set cheap = prices | select('le', threshold) | list %}
-              {{ (cheap | sum / cheap | length) | round(3) }}
-            {% else %}
-              {{ 0 }}
-            {% endif %}
+            {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
+            {% set cheap = prices | select('le', threshold) | list %}
+            {{ (cheap | sum / cheap | length) | round(3) if cheap | length > 0 else 0 }}
           {% else %}
             {{ 0 }}
           {% endif %}
         availability: >-
-          {{ state_attr('sensor.ev_price_cache', 'today') is not none }}
+          {{ state_attr('sensor.ev_price_cache', 'today') is not none
+             and has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV potential energy today"
         unique_id: ev_potential_energy_today
@@ -365,20 +399,15 @@ template:
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
-          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
-          {% set current_hour = now().hour %}
-          {% set remaining_prices = prices[current_hour:] %}
-          {% set sorted_all = prices | sort %}
-          {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-          {% set threshold = base + (base | abs) * tol %}
+          {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
+          {% set remaining_prices = prices[now().hour:] %}
           {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
-          {% set voltage = 230 %}
-          {{ (cheap_remaining | length * amps * voltage / 1000) | round(1) }}
+          {{ (cheap_remaining | length * amps * 230 / 1000) | round(1) }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {{ raw is not none and raw | length >= 24 }}
+          {{ raw is not none and raw | length >= 24
+             and has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV potential range today"
         unique_id: ev_potential_range_today
@@ -387,22 +416,17 @@ template:
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
-          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
-          {% set current_hour = now().hour %}
-          {% set remaining_prices = prices[current_hour:] %}
-          {% set sorted_all = prices | sort %}
-          {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-          {% set threshold = base + (base | abs) * tol %}
+          {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
+          {% set remaining_prices = prices[now().hour:] %}
           {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
-          {% set voltage = 230 %}
-          {% set kwh = cheap_remaining | length * amps * voltage / 1000 %}
+          {% set kwh = cheap_remaining | length * amps * 230 / 1000 %}
           {% set consumption = states('sensor.ev_average_consumption') | float(22) %}
           {{ (kwh / consumption * 100) | round(0) }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {{ raw is not none and raw | length >= 24 }}
+          {{ raw is not none and raw | length >= 24
+             and has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV cheap hours remaining"
         unique_id: ev_cheap_hours_remaining
@@ -411,17 +435,13 @@ template:
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
-          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
-          {% set current_hour = now().hour %}
-          {% set remaining_prices = prices[current_hour:] %}
-          {% set sorted_all = prices | sort %}
-          {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-          {% set threshold = base + (base | abs) * tol %}
+          {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
+          {% set remaining_prices = prices[now().hour:] %}
           {{ remaining_prices | select('le', threshold) | list | length }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {{ raw is not none and raw | length >= 24 }}
+          {{ raw is not none and raw | length >= 24
+             and has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV tomorrow cheapest hours"
         unique_id: ev_tomorrow_cheapest_hours
@@ -429,11 +449,16 @@ template:
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'tomorrow') %}
           {% set prices = raw | map(attribute='total') | list %}
-          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
+          {% set hours = [states('sensor.ev_hours_needed') | int(6), 1] | max %}
           {% set sorted = prices | sort %}
-          {% set base = sorted[hours - 1] %}
-          {% set threshold = base + (base | abs) * tol %}
+          {% set base = sorted[[hours - 1, sorted | length - 1] | min] %}
+          {% set spread = (sorted | last - sorted | first) if sorted | length > 1 else 0.01 %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
+          {% set extended = base + spread * tol %}
+          {% set avg = prices | sum / prices | length %}
+          {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
+          {% set ceiling = avg * cap_factor if avg > 0 else 999 %}
+          {% set threshold = [extended, ceiling] | min %}
           {% set ns = namespace(indices=[]) %}
           {% for p in prices %}
             {% if p <= threshold %}
@@ -452,13 +477,18 @@ template:
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'tomorrow') %}
           {% set prices = raw | map(attribute='total') | list %}
-          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
+          {% set hours = [states('sensor.ev_hours_needed') | int(6), 1] | max %}
           {% set sorted = prices | sort %}
-          {% set base = sorted[hours - 1] %}
-          {% set threshold = base + (base | abs) * tol %}
+          {% set base = sorted[[hours - 1, sorted | length - 1] | min] %}
+          {% set spread = (sorted | last - sorted | first) if sorted | length > 1 else 0.01 %}
+          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
+          {% set extended = base + spread * tol %}
+          {% set avg = prices | sum / prices | length %}
+          {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
+          {% set ceiling = avg * cap_factor if avg > 0 else 999 %}
+          {% set threshold = [extended, ceiling] | min %}
           {% set cheap = prices | select('le', threshold) | list %}
-          {{ (cheap | sum / cheap | length) | round(3) }}
+          {{ (cheap | sum / cheap | length) | round(3) if cheap | length > 0 else 0 }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'tomorrow') %}
           {{ raw is not none and raw | length >= 24 }}
@@ -469,12 +499,8 @@ template:
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
-          {% set hours = states('input_number.ev_cheap_hours') | int(6) %}
-          {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
+          {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
           {% set current_hour = now().hour %}
-          {% set sorted_all = prices | sort %}
-          {% set base = sorted_all[hours - 1] if sorted_all | length >= hours else 999 %}
-          {% set threshold = base + (base | abs) * tol %}
           {% set ns = namespace(found=-1) %}
           {% for h in range(current_hour, 24) %}
             {% if prices[h] <= threshold and ns.found == -1 %}
@@ -490,7 +516,8 @@ template:
           {% endif %}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {{ raw is not none and raw | length >= 24 }}
+          {{ raw is not none and raw | length >= 24
+             and has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV monthly cost forecast"
         unique_id: ev_monthly_cost_forecast
@@ -513,7 +540,7 @@ template:
         unit_of_measurement: "km"
         icon: mdi:road-variant
         state: >-
-          {% set hours = states('input_number.ev_cheap_hours') | float(6) %}
+          {% set hours = states('sensor.ev_hours_needed') | float(6) %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {% set voltage = 230 %}
           {% set consumption = states('sensor.ev_average_consumption') | float(22) %}
@@ -527,27 +554,8 @@ template:
           {{ (monthly_kwh / consumption * 100) | round(0) }}
         availability: >-
           {{ has_value('sensor.ev_expected_price_today')
-             and has_value('input_number.ev_cheap_hours')
+             and has_value('sensor.ev_hours_needed')
              and has_value('input_number.ev_current_normal') }}
-
-      # --- SoC-based hours calculation ---
-      - name: "EV hours needed to target"
-        unique_id: ev_hours_needed_to_target
-        unit_of_measurement: "h"
-        icon: mdi:clock-check-outline
-        state: >-
-          {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
-          {% set target = states('input_number.ev_target_soc') | float(100) %}
-          {% set capacity_kwh = 64.7 %}
-          {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
-          {% set kwh_needed = (target - soc) / 100 * capacity_kwh %}
-          {% if kwh_needed > 0 and power_kw > 0 %}
-            {{ (kwh_needed / power_kw) | round(1) }}
-          {% else %}
-            {{ 0 }}
-          {% endif %}
-        availability: >-
-          {{ has_value('sensor.ix1_xdrive30_battery_hv_state_of_charge') }}
 
       - name: "EV charging efficiency"
         unique_id: ev_charging_efficiency
@@ -571,15 +579,10 @@ template:
         unique_id: ev_estimated_full_time
         icon: mdi:clock-end
         state: >-
-          {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
-          {% set target = states('input_number.ev_target_soc') | float(100) %}
-          {% set capacity_kwh = 64.7 %}
-          {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
-          {% set kwh_needed = (target - soc) / 100 * capacity_kwh %}
-          {% if kwh_needed <= 0 or power_kw <= 0 %}
+          {% set hours_needed = states('sensor.ev_hours_needed') | int(0) %}
+          {% if hours_needed <= 0 %}
             ✓ Ziel erreicht
           {% else %}
-            {% set hours_needed = (kwh_needed / power_kw) | round(0, 'ceil') | int %}
             {% set raw_today = state_attr('sensor.ev_price_cache', 'today') %}
             {% set raw_tomorrow = state_attr('sensor.ev_price_cache', 'tomorrow') %}
             {% if raw_today is none %}
@@ -589,29 +592,25 @@ template:
               {% set prices_tomorrow = raw_tomorrow | map(attribute='total') | list if raw_tomorrow is not none else [] %}
               {% set tomorrow_available = prices_tomorrow | length >= 24 %}
               {% set combined = prices_today + prices_tomorrow %}
-              {% set max_hours = states('input_number.ev_cheap_hours') | int(6) %}
-              {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
-              {% set sorted_all = combined | sort %}
-              {% if sorted_all | length >= max_hours and combined | length > now().hour %}
-                {% set base = sorted_all[max_hours - 1] %}
-                {% set threshold = base + (base | abs) * tol %}
-                {% set current_hour = now().hour %}
-                {% set ns = namespace(count=0, end_hour=-1) %}
+              {% set current_hour = now().hour %}
+              {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
+              {% if combined | length > current_hour %}
+                {% set ns = namespace(count=0, wall_hour=-1) %}
                 {% for i in range(current_hour, combined | length) %}
-                  {% if ns.end_hour == -1 and combined[i] <= threshold %}
+                  {% if ns.wall_hour == -1 and combined[i] <= threshold %}
                     {% set ns.count = ns.count + 1 %}
                     {% if ns.count >= hours_needed %}
-                      {% set ns.end_hour = i + 1 %}
+                      {% set ns.wall_hour = i + 1 %}
                     {% endif %}
                   {% endif %}
                 {% endfor %}
-                {% if ns.end_hour > 0 %}
-                  {% if ns.end_hour < 24 %}
-                    heute {{ '%02d:00' | format(ns.end_hour) }}
-                  {% elif ns.end_hour == 24 %}
+                {% if ns.wall_hour > 0 %}
+                  {% if ns.wall_hour < 24 %}
+                    heute {{ '%02d:00' | format(ns.wall_hour) }}
+                  {% elif ns.wall_hour == 24 %}
                     morgen 00:00
-                  {% elif ns.end_hour < 48 %}
-                    morgen {{ '%02d:00' | format(ns.end_hour - 24) }}
+                  {% elif ns.wall_hour < 48 %}
+                    morgen {{ '%02d:00' | format(ns.wall_hour - 24) }}
                   {% else %}
                     > 48h
                   {% endif %}
@@ -626,9 +625,8 @@ template:
             {% endif %}
           {% endif %}
         availability: >-
-          {{ has_value('sensor.ix1_xdrive30_battery_hv_state_of_charge')
-             and has_value('input_number.ev_target_soc')
-             and has_value('input_number.ev_current_normal') }}
+          {{ has_value('sensor.ev_hours_needed')
+             and has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV house voltage L1"
         unique_id: ev_house_voltage_l1
@@ -742,6 +740,26 @@ template:
         icon: mdi:ev-plug-type2
         state: "{{ states('sensor.goe_${GOE_SERIAL}_wh') | float(0) | round(3) }}"
 
+  # --- Last-known SoC: holds the most recent valid battery reading ---
+  # When the BMW API goes offline, the SoC sensor becomes unavailable.
+  # This trigger-based sensor preserves the last good reading so the
+  # scheduler and display sensors can still compute hours_needed.
+  - triggers:
+      - trigger: state
+        entity_id: sensor.ix1_xdrive30_battery_hv_state_of_charge
+        not_to:
+          - unknown
+          - unavailable
+          - none
+    sensor:
+      - name: "EV last known SoC"
+        unique_id: ev_last_known_soc
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        icon: mdi:battery-sync
+        state: "{{ states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) }}"
+
 # =============================================================================
 # INTEGRATION SENSOR — Riemann sum for accumulated EV cost
 # =============================================================================
@@ -810,8 +828,9 @@ automation:
   - id: ev_smart_charge_scheduler
     alias: "EV: Smart charge during cheapest hours"
     description: >-
-      Charges the EV only during the X cheapest hours of the day
-      and stops when the monthly EV budget is exceeded.
+      Charges the EV only during the cheapest hours based on SoC-driven
+      demand and a three-layer price threshold (base + spread × tolerance,
+      capped by ceiling). Stops when budget is exceeded or target SoC reached.
       Uses frc=2 to force-start and frc=1 to force-stop.
     mode: single
     triggers:
@@ -844,14 +863,8 @@ automation:
           budget_exceeded: >-
             {{ monthly_ev_cost >= monthly_budget }}
           cheap_hours: >-
-            {% set max_hours = states('input_number.ev_cheap_hours') | int(6) %}
-            {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
-            {% set target = states('input_number.ev_target_soc') | float(100) %}
-            {% set capacity_kwh = 64.7 %}
-            {% set power_kw = states('input_number.ev_current_normal') | float(10) * 230 / 1000 %}
-            {% set kwh_needed = (target - soc) / 100 * capacity_kwh %}
-            {% set hours_needed = (kwh_needed / power_kw) | round(0, 'ceil') | int if power_kw > 0 else max_hours %}
-            {{ [hours_needed, max_hours] | min if hours_needed > 0 else max_hours }}
+            {% set hours = states('sensor.ev_hours_needed') | int(6) %}
+            {{ [hours, 1] | max }}
           current_hour: "{{ now().hour }}"
           prices_today: >-
             {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
@@ -860,16 +873,19 @@ automation:
             {% set raw = state_attr('sensor.ev_price_cache', 'tomorrow') %}
             {{ raw | map(attribute='total') | list if raw is not none else [] }}
           combined_prices: >-
-            {{ prices_today + prices_tomorrow if prices_tomorrow | length >= 24 else prices_today }}
+            {% set today = prices_today[now().hour:] if prices_today | length > now().hour else [] %}
+            {% set tomorrow = prices_tomorrow if prices_tomorrow | length >= 24 else [] %}
+            {{ today + tomorrow }}
           sorted_prices: >-
             {{ combined_prices | sort if combined_prices | length > 0 else [] }}
           # "Natural cheap window" threshold
           # ------------------------------------------------------------------
           # Three-layer computation:
-          #   1. base:     N-th cheapest price (N = hours_needed, capped at
-          #                max_hours as a hard per-day upper bound).
-          #   2. extended: base × (1 + tolerance) — grabs clustered near-
-          #                cheap hours just above the strict cutoff.
+          #   1. base:     N-th cheapest future price (N = hours_needed
+          #                from SoC, via sensor.ev_hours_needed).
+          #   2. extended: base + spread × tolerance — spread is the
+          #                day's price range (max−min), safe for negative
+          #                prices unlike the old |base| × tol formula.
           #   3. ceiling:  daily_avg × max_price_vs_avg — hard safety cap
           #                so we never charge above a fraction of the
           #                day's average, even if need/tolerance suggest it.
@@ -882,8 +898,9 @@ automation:
             {% set base = sorted_prices[cheap_hours - 1]
                if sorted_prices | length >= cheap_hours
                else 999 %}
+            {% set spread = (sorted_prices | last - sorted_prices | first) if sorted_prices | length > 1 else 0.01 %}
             {% set tol = states('input_number.ev_cheap_price_tolerance') | float(20) / 100 %}
-            {% set extended = base + (base | abs) * tol %}
+            {% set extended = base + spread * tol %}
             {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
             {% set ceiling = daily_avg * cap_factor if daily_avg > 0 else 999 %}
             {{ [extended, ceiling] | min }}
@@ -913,7 +930,15 @@ automation:
             {% set avg = state_attr('sensor.electricity_price_${TIBBER_HOME}', 'avg_price') | float(0.30) %}
             {{ current <= avg and not budget_exceeded and voltage_ok }}
           soc_ok: >-
-            {% set soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) %}
+            {% set live_soc = states('sensor.ix1_xdrive30_battery_hv_state_of_charge') %}
+            {% set last_soc = states('sensor.ev_last_known_soc') %}
+            {% if live_soc not in ['unknown', 'unavailable', 'none', ''] %}
+              {% set soc = live_soc | float(0) %}
+            {% elif last_soc not in ['unknown', 'unavailable', 'none', ''] %}
+              {% set soc = last_soc | float(0) %}
+            {% else %}
+              {% set soc = 0 %}
+            {% endif %}
             {% set target = states('input_number.ev_target_soc') | float(100) %}
             {{ soc < target }}
           should_charge: >-

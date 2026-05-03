@@ -4,10 +4,10 @@ Smart EV charging automation for Home Assistant using Tibber dynamic pricing, go
 
 ## Features
 
-- **Smart scheduling** — charges only during the cheapest hours of the day (Tibber 15-min prices) using a "Natural Cheap Window" algorithm (base + tolerance + daily-avg ceiling)
+- **Dynamic scheduling** — automatically calculates required charging hours from SoC (live → last known → 50% fallback) and charges only during the cheapest matching window using a "Natural Cheap Window" algorithm (base + spread × tolerance + daily-avg ceiling)
 - **Live-price decisions** — scheduler compares against the live Tibber price, not just the hourly sample, so it reacts to intra-hour price drops
 - **SoC-based stop** — stops charging when battery reaches target SoC (default 100%)
-- **Dynamic hour calculation** — automatically computes how many cheap hours are needed based on current SoC and target
+- **Dynamic hour calculation** — automatically computes how many cheap hours are needed based on current SoC and target (no manual slider — hours are derived entirely from SoC)
 - **Overnight charging** — combines today + tomorrow prices for optimal scheduling across midnight
 - **Monthly EV cost budget** — tracks EV-specific cost and stops when budget is reached
 - **Negative price handling** — fully supports negative energy prices. Charging during negative prices correctly *reduces* your accumulated monthly cost and frees up budget.
@@ -78,8 +78,7 @@ All parameters are adjustable from the HA dashboard at runtime:
 |---|---|---|
 | Target SoC | 100% | Stop charging when battery reaches this level |
 | Monthly budget | 50 EUR | Max EV charging spend per month |
-| Cheap hours/day | 6 | Upper cap on hours charged per day (actual hours are dynamically calculated from SoC, then extended via tolerance) |
-| Cheap price tolerance | 20% | How far above the N-th cheapest hour's price still counts as cheap — catches clustered near-cheap hours |
+| Cheap price tolerance | 20% | Fraction of price spread (max−min) added to the base threshold — catches clustered near-cheap hours; works safely with negative prices |
 | Max price vs daily avg | 0.9 | Hard ceiling: never charge above this fraction of the day's average price, regardless of need or tolerance |
 | Normal current | 10 A | Standard charging current (Schuko) |
 | Safe current | 6 A | Reduced current on low voltage |
@@ -87,9 +86,81 @@ All parameters are adjustable from the HA dashboard at runtime:
 | Voltage reduce | 210 V | Current reduction threshold |
 | Voltage stop | 208 V | Force-stop threshold |
 
-**Note:** "Cheap hours/day" acts as a maximum. The scheduler dynamically calculates how many hours are actually needed based on current SoC → target SoC at the configured charging power. If you're at 75% with a target of 80%, it only books 1-2 cheap hours instead of 6.
+**Note:** The scheduler dynamically calculates how many hours are actually needed based on current SoC → target SoC at the configured charging power. There is no manual "cheap hours" cap — hours are derived entirely from the SoC chain (live BMW → last known → 50% fallback).
 
 ## How It Works
+
+### Scheduler Decision Flow
+
+```mermaid
+flowchart TD
+    trigger["⏱️ Trigger\n(every minute / car plugged in / price change)"]
+    trigger --> cond_enabled{Smart charging\nenabled?}
+    cond_enabled -- No --> idle([Do nothing])
+    cond_enabled -- Yes --> cond_force{Force charge\noverride?}
+    cond_force -- Yes --> idle
+    cond_force -- No --> cond_car{Car\nconnected?}
+    cond_car -- No --> idle
+    cond_car -- Yes --> calc_hours["Calculate hours_needed\n(SoC chain → kWh → hours)"]
+    calc_hours --> calc_threshold["Calculate price threshold\n(3-layer: base → extended → ceiling)"]
+    calc_threshold --> gather{"Gather checks"}
+    gather --> check_price{Current price\n≤ threshold?}
+    gather --> check_soc{SoC\n< target?}
+    gather --> check_budget{Monthly cost\n< budget?}
+    gather --> check_voltage{Voltage\nOK?}
+    check_price -- No --> stop
+    check_soc -- No --> stop
+    check_budget -- No --> stop
+    check_voltage -- No --> stop
+    check_price -- Yes --> all_ok
+    check_soc -- Yes --> all_ok
+    check_budget -- Yes --> all_ok
+    check_voltage -- Yes --> all_ok
+    all_ok{All checks\npassed?} -- Yes --> charge["🟢 frc=2\nForce charge + notify"]
+    all_ok -- No --> stop["🔴 frc=1\nForce stop + notify"]
+
+    style charge fill:#2d6a2d,color:#fff
+    style stop fill:#8b1a1a,color:#fff
+    style idle fill:#555,color:#fff
+```
+
+### Three-Layer Price Threshold
+
+```mermaid
+flowchart LR
+    prices["Future hourly prices\n(today + tomorrow,\npast hours removed)"] --> sort[Sort ascending]
+    sort --> base["🔵 base\nN-th cheapest price\n(N = hours_needed from SoC)"]
+    base --> spread["Calculate spread\nmax price − min price"]
+    spread --> extended["🟡 extended\nbase + spread × tolerance"]
+    prices --> avg["Calculate daily avg"]
+    avg --> ceiling["🟠 ceiling\navg × max_price_vs_avg"]
+    extended --> final["✅ threshold\n= min(extended, ceiling)"]
+    ceiling --> final
+
+    style base fill:#1a5276,color:#fff
+    style extended fill:#7d6608,color:#fff
+    style ceiling fill:#935116,color:#fff
+    style final fill:#1e8449,color:#fff
+```
+
+### SoC Fallback Chain
+
+```mermaid
+flowchart LR
+    start([hours_needed?]) --> live{Live BMW SoC\navailable?}
+    live -- Yes --> use_live["Use live SoC\n(real-time from CarData)"]
+    live -- No --> last{Last known SoC\navailable?}
+    last -- Yes --> use_last["Use last known SoC\n(preserved across outages)"]
+    last -- No --> fallback["Assume 50%\n(conservative default)"]
+    use_live --> calc
+    use_last --> calc
+    fallback --> calc
+    calc["hours = ⌈(target − soc) / 100 × 64.7 kWh / power_kW⌉"]
+
+    style use_live fill:#1a5276,color:#fff
+    style use_last fill:#7d6608,color:#fff
+    style fallback fill:#935116,color:#fff
+```
 
 ### Price Data
 
@@ -103,23 +174,23 @@ The scheduler runs every minute (plus on car connect and price change) and uses 
 **"Natural Cheap Window"** three-layer price threshold:
 
 ```
-1. base     = N-th cheapest price        (N = dynamic hours_needed, capped by cheap_hours setting)
-2. extended = base × (1 + tolerance)      (catches clustered near-cheap hours)
-3. ceiling  = daily_avg × max_vs_avg     (hard safety cap — never above X% of daily average)
+1. base     = N-th cheapest future price  (N = hours_needed from SoC, no manual cap)
+2. extended = base + spread × tolerance   (spread = max−min of future prices; negative-price safe)
+3. ceiling  = daily_avg × max_vs_avg      (hard safety cap — never above X% of daily average)
 
 final_threshold = min(extended, ceiling)
 ```
 
 This approach automatically adapts to the price landscape:
-- **Spiky days** (e.g. cheap valley 0.04 € + peak 0.43 €): tolerance expands around the valley to capture clustered cheap hours.
-- **Flat days** (e.g. all hours 0.25–0.30 €): ceiling clamps the threshold to ~90% of the day's average, preventing pointless charging during expensive hours just because we "need" more.
+- **Spiky days** (e.g. cheap valley 0.04 € + peak 0.43 €): large spread means tolerance expands well around the valley to capture clustered cheap hours.
+- **Flat days** (e.g. all hours 0.25–0.30 €): small spread keeps the threshold tight; ceiling clamps to ~90% of the day's average, preventing pointless charging during expensive hours just because we "need" more.
 
 Every minute (+ on car connect, + on price change):
 ```
-  1. Read cached hourly prices (today + tomorrow if available)
-  2. Calculate hours_needed: (target_soc - current_soc) / 100 × 64.7 kWh / charge_power
-  3. Compute base threshold = N-th cheapest price (N = min(hours_needed, cheap_hours))
-  4. Compute extended threshold = base × (1 + tolerance)
+  1. Read cached hourly prices (today + tomorrow if available); slice off past hours (future-only)
+  2. Calculate hours_needed from SoC chain: (target_soc - current_soc) / 100 × 64.7 kWh / charge_power
+  3. Compute base threshold = N-th cheapest future price (N = hours_needed from SoC)
+  4. Compute extended threshold = base + spread × tolerance (spread = max − min of future prices)
   5. Compute ceiling = daily_avg × max_price_vs_avg
   6. Final threshold = min(extended, ceiling)
   7. Check: current hour price ≤ final threshold?
@@ -203,7 +274,8 @@ They also enable the `--reload` / `--restart` flags, which only fire when the ge
 
 | Entity | Description |
 |---|---|
-| `sensor.ev_hours_needed_to_target` | Dynamic: hours needed from current SoC to target at configured power |
+| `sensor.ev_hours_needed` | Dynamic: hours needed from current SoC to target at configured power (SoC chain: live → last known → 50% fallback) |
+| `sensor.ev_last_known_soc` | Preserves last valid BMW SoC across unavailability periods |
 | `sensor.ev_estimated_full_time` | ETA: clock time when target SoC will be reached |
 | `sensor.ev_charging_efficiency` | Wallbox→battery efficiency in % (BMW power / wallbox power) |
 | `sensor.ev_expected_price_today` | Avg price of today's X cheapest hours |
@@ -274,7 +346,7 @@ Two views optimized for readability:
 - SoC gauge
 - Smart charging info (hours needed, ETA, efficiency, cost rate)
 - Budget gauge + monthly cost/energy
-- Scheduling (target SoC, cheap hours, next cheap hour, potential energy/range)
+- Scheduling (target SoC, hours needed, next cheap hour, potential energy/range)
 - Tomorrow preview
 - Cost forecast
 - Quick action buttons (Smart Charging / Force Charge)

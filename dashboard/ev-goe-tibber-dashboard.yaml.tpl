@@ -122,7 +122,7 @@ views:
         title: "🧠 Smart Charging"
         show_header_toggle: false
         entities:
-          - entity: sensor.ev_hours_needed_to_target
+          - entity: sensor.ev_hours_needed
             name: Hours needed to target
           - entity: sensor.ev_estimated_full_time
             name: Estimated full at
@@ -170,8 +170,8 @@ views:
         entities:
           - entity: input_number.ev_target_soc
             name: Charge target SoC
-          - entity: input_number.ev_cheap_hours
-            name: Cheap hours per day
+          - entity: sensor.ev_hours_needed
+            name: Calculated hours needed
           - entity: input_number.ev_cheap_price_tolerance
             name: Cheap price tolerance
           - entity: input_number.ev_max_price_vs_avg
