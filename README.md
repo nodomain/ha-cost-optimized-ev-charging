@@ -98,7 +98,7 @@ flowchart TD
     trigger --> cond_enabled{Smart charging\nenabled?}
     cond_enabled -- No --> skip1([Skip])
     cond_enabled -- Yes --> cond_force{Force charge\noverride?}
-    cond_force -- Yes --> skip2([Skip])
+    cond_force -- Yes --> force(["⚡ Handled by\nForce Charge automation"])
     cond_force -- No --> cond_car{Car\nconnected?}
     cond_car -- No --> skip3([Skip])
     cond_car -- Yes --> calc["Calculate hours_needed\n+ price threshold"]
@@ -109,7 +109,7 @@ flowchart TD
     style charge fill:#2d6a2d,color:#fff
     style stop fill:#8b1a1a,color:#fff
     style skip1 fill:#555,color:#fff
-    style skip2 fill:#555,color:#fff
+    style force fill:#b8860b,color:#fff
     style skip3 fill:#555,color:#fff
 ```
 
