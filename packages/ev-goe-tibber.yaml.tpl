@@ -400,10 +400,13 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
-          {% set remaining_prices = prices[now().hour:] %}
-          {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
+          {# For the current hour use live Tibber price (15-min resolution) #}
+          {% set live_price = states('sensor.electricity_price_${TIBBER_HOME}') | float(-1) %}
+          {% set current_cheap = 1 if live_price >= 0 and live_price <= threshold else 0 %}
+          {% set future_prices = prices[now().hour + 1:] %}
+          {% set cheap_count = current_cheap + future_prices | select('le', threshold) | list | length %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
-          {{ (cheap_remaining | length * amps * 230 / 1000) | round(1) }}
+          {{ (cheap_count * amps * 230 / 1000) | round(1) }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {{ raw is not none and raw | length >= 24
@@ -417,10 +420,13 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
-          {% set remaining_prices = prices[now().hour:] %}
-          {% set cheap_remaining = remaining_prices | select('le', threshold) | list %}
+          {# For the current hour use live Tibber price (15-min resolution) #}
+          {% set live_price = states('sensor.electricity_price_${TIBBER_HOME}') | float(-1) %}
+          {% set current_cheap = 1 if live_price >= 0 and live_price <= threshold else 0 %}
+          {% set future_prices = prices[now().hour + 1:] %}
+          {% set cheap_count = current_cheap + future_prices | select('le', threshold) | list | length %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
-          {% set kwh = cheap_remaining | length * amps * 230 / 1000 %}
+          {% set kwh = cheap_count * amps * 230 / 1000 %}
           {% set consumption = states('sensor.ev_average_consumption') | float(22) %}
           {{ (kwh / consumption * 100) | round(0) }}
         availability: >-
@@ -436,8 +442,11 @@ template:
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {% set prices = raw | map(attribute='total') | list %}
           {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
-          {% set remaining_prices = prices[now().hour:] %}
-          {{ remaining_prices | select('le', threshold) | list | length }}
+          {# For the current hour use live Tibber price (15-min resolution) #}
+          {% set live_price = states('sensor.electricity_price_${TIBBER_HOME}') | float(-1) %}
+          {% set current_cheap = 1 if live_price >= 0 and live_price <= threshold else 0 %}
+          {% set future_prices = prices[now().hour + 1:] %}
+          {{ current_cheap + future_prices | select('le', threshold) | list | length }}
         availability: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
           {{ raw is not none and raw | length >= 24
@@ -501,12 +510,20 @@ template:
           {% set prices = raw | map(attribute='total') | list %}
           {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
           {% set current_hour = now().hour %}
+          {# For the current hour use the live Tibber price (15-min resolution)
+             to match the automation's actual charging decision. For future
+             hours we only have the hourly cache. #}
+          {% set live_price = states('sensor.electricity_price_${TIBBER_HOME}') | float(-1) %}
           {% set ns = namespace(found=-1) %}
-          {% for h in range(current_hour, 24) %}
-            {% if prices[h] <= threshold and ns.found == -1 %}
-              {% set ns.found = h %}
-            {% endif %}
-          {% endfor %}
+          {% if live_price >= 0 and live_price <= threshold %}
+            {% set ns.found = current_hour %}
+          {% else %}
+            {% for h in range(current_hour + 1, 24) %}
+              {% if prices[h] <= threshold and ns.found == -1 %}
+                {% set ns.found = h %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
           {% if ns.found == current_hour %}
             now
           {% elif ns.found >= 0 %}
