@@ -153,6 +153,7 @@ template:
           start: "{{ today_at('00:00') }}"
           end: "{{ today_at('23:59') }}"
         response_variable: today_resp
+        continue_on_error: true
       - action: tibber.get_prices
         data:
           start: "{{ (today_at('00:00') + timedelta(days=1)).isoformat() }}"
@@ -166,12 +167,20 @@ template:
         state: "{{ now().isoformat() }}"
         attributes:
           today: >-
-            {% set entries = today_resp.prices.values() | first | default([]) %}
-            {% set ns = namespace(hourly=[]) %}
-            {% for i in range(0, entries | length, 4) %}
-              {% set ns.hourly = ns.hourly + [{'total': entries[i].price}] %}
-            {% endfor %}
-            {{ ns.hourly }}
+            {# Parse fresh data from API response #}
+            {% set entries = today_resp.prices.values() | first | default([])
+               if today_resp is defined and today_resp.prices is defined
+               else [] %}
+            {% if entries | length >= 96 %}
+              {% set ns = namespace(hourly=[]) %}
+              {% for i in range(0, entries | length, 4) %}
+                {% set ns.hourly = ns.hourly + [{'total': entries[i].price}] %}
+              {% endfor %}
+              {{ ns.hourly }}
+            {% else %}
+              {# API failed or returned incomplete data — keep previous cache #}
+              {{ this.attributes.get('today', none) }}
+            {% endif %}
           tomorrow: >-
             {% if tomorrow_resp is defined and tomorrow_resp.prices is defined %}
               {% set entries = tomorrow_resp.prices.values() | first | default([]) %}
@@ -182,10 +191,10 @@ template:
                 {% endfor %}
                 {{ ns.hourly }}
               {% else %}
-                {{ none }}
+                {{ this.attributes.get('tomorrow', none) }}
               {% endif %}
             {% else %}
-              {{ none }}
+              {{ this.attributes.get('tomorrow', none) }}
             {% endif %}
 
   # --- All EV sensors in one consolidated block ---
@@ -283,7 +292,10 @@ template:
         state: >-
           {% set raw_today = state_attr('sensor.ev_price_cache', 'today') %}
           {% if raw_today is none or raw_today | length == 0 %}
-            {{ 0 }}
+            {# Fallback: use Tibber daily avg * cap_factor as safe threshold #}
+            {% set avg = state_attr('sensor.electricity_price_${TIBBER_HOME}', 'avg_price') | float(0.30) %}
+            {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
+            {{ (avg * cap_factor) | round(4) }}
           {% else %}
             {% set prices_today = raw_today | map(attribute='total') | list %}
             {% set raw_tomorrow = state_attr('sensor.ev_price_cache', 'tomorrow') %}
@@ -372,7 +384,7 @@ template:
               {{ 'tolerance' if extended <= ceiling else 'ceiling' }}
             {% endif %}
         availability: >-
-          {{ state_attr('sensor.ev_price_cache', 'today') is not none }}
+          {{ has_value('sensor.electricity_price_${TIBBER_HOME}') }}
 
       - name: "EV expected price today"
         unique_id: ev_expected_price_today
@@ -398,19 +410,21 @@ template:
         icon: mdi:battery-charging
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {% set prices = raw | map(attribute='total') | list %}
           {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
-          {# For the current hour use live Tibber price (15-min resolution) #}
           {% set live_price = states('sensor.electricity_price_${TIBBER_HOME}') | float(-1) %}
-          {% set current_cheap = 1 if live_price >= 0 and live_price <= threshold else 0 %}
-          {% set future_prices = prices[now().hour + 1:] %}
-          {% set cheap_count = current_cheap + future_prices | select('le', threshold) | list | length %}
+          {% if raw is not none and raw | length >= 24 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set current_cheap = 1 if live_price >= 0 and live_price <= threshold else 0 %}
+            {% set future_prices = prices[now().hour + 1:] %}
+            {% set cheap_count = current_cheap + future_prices | select('le', threshold) | list | length %}
+          {% else %}
+            {# No cache — count only current hour if live price is cheap #}
+            {% set cheap_count = 1 if live_price >= 0 and live_price <= threshold else 0 %}
+          {% endif %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {{ (cheap_count * amps * 230 / 1000) | round(1) }}
         availability: >-
-          {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {{ raw is not none and raw | length >= 24
-             and has_value('sensor.ev_charge_price_threshold') }}
+          {{ has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV potential range today"
         unique_id: ev_potential_range_today
@@ -418,21 +432,22 @@ template:
         icon: mdi:map-marker-distance
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {% set prices = raw | map(attribute='total') | list %}
           {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
-          {# For the current hour use live Tibber price (15-min resolution) #}
           {% set live_price = states('sensor.electricity_price_${TIBBER_HOME}') | float(-1) %}
-          {% set current_cheap = 1 if live_price >= 0 and live_price <= threshold else 0 %}
-          {% set future_prices = prices[now().hour + 1:] %}
-          {% set cheap_count = current_cheap + future_prices | select('le', threshold) | list | length %}
+          {% if raw is not none and raw | length >= 24 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set current_cheap = 1 if live_price >= 0 and live_price <= threshold else 0 %}
+            {% set future_prices = prices[now().hour + 1:] %}
+            {% set cheap_count = current_cheap + future_prices | select('le', threshold) | list | length %}
+          {% else %}
+            {% set cheap_count = 1 if live_price >= 0 and live_price <= threshold else 0 %}
+          {% endif %}
           {% set amps = states('input_number.ev_current_normal') | float(10) %}
           {% set kwh = cheap_count * amps * 230 / 1000 %}
           {% set consumption = states('sensor.ev_average_consumption') | float(22) %}
           {{ (kwh / consumption * 100) | round(0) }}
         availability: >-
-          {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {{ raw is not none and raw | length >= 24
-             and has_value('sensor.ev_charge_price_threshold') }}
+          {{ has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV cheap hours remaining"
         unique_id: ev_cheap_hours_remaining
@@ -440,17 +455,19 @@ template:
         icon: mdi:clock-fast
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {% set prices = raw | map(attribute='total') | list %}
           {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
-          {# For the current hour use live Tibber price (15-min resolution) #}
           {% set live_price = states('sensor.electricity_price_${TIBBER_HOME}') | float(-1) %}
-          {% set current_cheap = 1 if live_price >= 0 and live_price <= threshold else 0 %}
-          {% set future_prices = prices[now().hour + 1:] %}
-          {{ current_cheap + future_prices | select('le', threshold) | list | length }}
+          {% if raw is not none and raw | length >= 24 %}
+            {% set prices = raw | map(attribute='total') | list %}
+            {% set current_cheap = 1 if live_price >= 0 and live_price <= threshold else 0 %}
+            {% set future_prices = prices[now().hour + 1:] %}
+            {{ current_cheap + future_prices | select('le', threshold) | list | length }}
+          {% else %}
+            {# No cache — can only evaluate current slot #}
+            {{ 1 if live_price >= 0 and live_price <= threshold else 0 }}
+          {% endif %}
         availability: >-
-          {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {{ raw is not none and raw | length >= 24
-             and has_value('sensor.ev_charge_price_threshold') }}
+          {{ has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV tomorrow cheapest hours"
         unique_id: ev_tomorrow_cheapest_hours
@@ -507,17 +524,16 @@ template:
         icon: mdi:clock-start
         state: >-
           {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {% set prices = raw | map(attribute='total') | list %}
           {% set threshold = states('sensor.ev_charge_price_threshold') | float(0) %}
           {% set current_hour = now().hour %}
-          {# For the current hour use the live Tibber price (15-min resolution)
-             to match the automation's actual charging decision. For future
-             hours we only have the hourly cache. #}
           {% set live_price = states('sensor.electricity_price_${TIBBER_HOME}') | float(-1) %}
           {% set ns = namespace(found=-1) %}
+          {# Check current hour via live price #}
           {% if live_price >= 0 and live_price <= threshold %}
             {% set ns.found = current_hour %}
-          {% else %}
+          {% elif raw is not none and raw | length >= 24 %}
+            {# Search future hours in cache #}
+            {% set prices = raw | map(attribute='total') | list %}
             {% for h in range(current_hour + 1, 24) %}
               {% if prices[h] <= threshold and ns.found == -1 %}
                 {% set ns.found = h %}
@@ -532,9 +548,7 @@ template:
             tomorrow
           {% endif %}
         availability: >-
-          {% set raw = state_attr('sensor.ev_price_cache', 'today') %}
-          {{ raw is not none and raw | length >= 24
-             and has_value('sensor.ev_charge_price_threshold') }}
+          {{ has_value('sensor.ev_charge_price_threshold') }}
 
       - name: "EV monthly cost forecast"
         unique_id: ev_monthly_cost_forecast
