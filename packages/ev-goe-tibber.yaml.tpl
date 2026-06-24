@@ -124,18 +124,28 @@ input_number:
 
   ev_max_price_vs_avg:
     name: "EV max price vs daily avg"
-    # Hard upper cap for the charging threshold, expressed as a fraction of
-    # the day's average price. 0.9 means: never charge above 90% of daily
-    # average, even if tolerance or hours_needed would suggest otherwise.
-    # This is the "natural cheap window" safety limit — ensures we never
-    # pay above-average prices while hamstering cheap energy.
-    # 1.0 disables the cap (classic behaviour).
+    # Relative cap: fraction of the day's average price.
+    # 0.9 means: never charge above 90% of daily average.
+    # 1.0 disables the relative cap.
     min: 0.5
     max: 1.2
     step: 0.05
     icon: mdi:chart-bell-curve
     mode: slider
     initial: 0.9
+
+  ev_absolute_max_price:
+    name: "EV absolute max price"
+    # Hard absolute ceiling in EUR/kWh. The scheduler will NEVER charge
+    # above this price regardless of daily average or hours needed.
+    # Set to 0.30 for ~30 ct hard limit, 0.50 to effectively disable.
+    min: 0.15
+    max: 0.50
+    step: 0.01
+    unit_of_measurement: "EUR/kWh"
+    icon: mdi:cash-lock
+    mode: slider
+    initial: 0.33
 
 # =============================================================================
 # TEMPLATE SENSORS
@@ -291,11 +301,12 @@ template:
         icon: mdi:ruler
         state: >-
           {% set raw_today = state_attr('sensor.ev_price_cache', 'today') %}
+          {% set abs_max = states('input_number.ev_absolute_max_price') | float(0.50) %}
           {% if raw_today is none or raw_today | length == 0 %}
-            {# Fallback: use Tibber daily avg * cap_factor as safe threshold #}
+            {# Fallback: use Tibber daily avg * cap_factor, capped by absolute max #}
             {% set avg = state_attr('sensor.electricity_price_${TIBBER_HOME}', 'avg_price') | float(0.30) %}
             {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
-            {{ (avg * cap_factor) | round(4) }}
+            {{ [[avg * cap_factor, abs_max] | min, 0] | max | round(4) }}
           {% else %}
             {% set prices_today = raw_today | map(attribute='total') | list %}
             {% set raw_tomorrow = state_attr('sensor.ev_price_cache', 'tomorrow') %}
@@ -312,7 +323,7 @@ template:
             {% set avg = future | sum / future | length if future | length > 0 else 0 %}
             {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
             {% set ceiling = avg * cap_factor if avg > 0 else 999 %}
-            {{ [extended, ceiling] | min | round(4) }}
+            {{ [extended, ceiling, abs_max] | min | round(4) }}
           {% endif %}
         attributes:
           hours_needed: >-
@@ -381,7 +392,15 @@ template:
               {% set avg = future | sum / future | length if future | length > 0 else 0 %}
               {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
               {% set ceiling = avg * cap_factor if avg > 0 else 999 %}
-              {{ 'tolerance' if extended <= ceiling else 'ceiling' }}
+              {% set abs_max = states('input_number.ev_absolute_max_price') | float(0.50) %}
+              {% set final = [extended, ceiling, abs_max] | min %}
+              {% if final == abs_max and abs_max < extended and abs_max < ceiling %}
+                absolute
+              {% elif extended <= ceiling %}
+                tolerance
+              {% else %}
+                ceiling
+              {% endif %}
             {% endif %}
         availability: >-
           {{ has_value('sensor.electricity_price_${TIBBER_HOME}') }}
@@ -936,7 +955,8 @@ automation:
             {% set extended = base + spread * tol %}
             {% set cap_factor = states('input_number.ev_max_price_vs_avg') | float(0.9) %}
             {% set ceiling = daily_avg * cap_factor if daily_avg > 0 else 999 %}
-            {{ [extended, ceiling] | min }}
+            {% set abs_max = states('input_number.ev_absolute_max_price') | float(0.50) %}
+            {{ [extended, ceiling, abs_max] | min }}
           current_price: >-
             {# Always use the live Tibber sensor — it reflects the active
                15-minute slot, while prices_today is only a 1-per-hour

@@ -176,6 +176,8 @@ views:
             name: Cheap price tolerance
           - entity: input_number.ev_max_price_vs_avg
             name: Max price vs daily avg
+          - entity: input_number.ev_absolute_max_price
+            name: Absolute max price
 
       # --- Live Info ---
       - type: entities
