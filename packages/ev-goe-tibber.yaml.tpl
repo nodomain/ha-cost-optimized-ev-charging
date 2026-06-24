@@ -145,7 +145,7 @@ input_number:
     unit_of_measurement: "EUR/kWh"
     icon: mdi:cash-lock
     mode: slider
-    initial: 0.33
+    initial: 0.30
 
 # =============================================================================
 # TEMPLATE SENSORS
