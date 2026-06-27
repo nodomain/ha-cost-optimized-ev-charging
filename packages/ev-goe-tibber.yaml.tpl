@@ -40,6 +40,7 @@ input_boolean:
   ev_require_authentication:
     name: "EV require authentication (outage-safe)"
     icon: mdi:shield-lock
+    initial: true
 
   # Internal flag: set while the charger is offline long enough to warn,
   # cleared when it comes back. Gates the "back online" notification so it
