@@ -39,6 +39,13 @@ views:
             show_state: true
             tap_action:
               action: toggle
+          - type: button
+            entity: input_boolean.ev_require_authentication
+            name: Auth Lock
+            icon: mdi:shield-lock
+            show_state: true
+            tap_action:
+              action: toggle
 
       # --- Smart charging decision widget ------------------------------------
       # Single-line status showing whether the scheduler considers "now" a

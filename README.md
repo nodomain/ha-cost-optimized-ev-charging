@@ -85,6 +85,7 @@ All parameters are adjustable from the HA dashboard at runtime:
 | Voltage warn | 215 V | Notification threshold |
 | Voltage reduce | 210 V | Current reduction threshold |
 | Voltage stop | 208 V | Force-stop threshold |
+| Require authentication | off | Outage-safe gate: charge only via charger access control (`trx`). Needs access control enabled in the go-e app. See [Powerline Outage Hardening](#powerline-outage-hardening) |
 
 **Note:** The scheduler dynamically calculates how many hours are actually needed based on current SoC → target SoC at the configured charging power. There is no manual "cheap hours" cap — hours are derived entirely from the SoC chain (live BMW → last known → 50% fallback).
 
@@ -205,6 +206,42 @@ the car will charge through the night without interruption.
 **Important:** `frc=0` does NOT stop charging — it lets the wallbox decide on its own.
 The automation always uses `frc=1` to actively prevent charging during expensive hours.
 
+### Powerline Outage Hardening
+
+`frc` is a **transient** state. When the Powerline link to the garage drops, the
+go-eCharger loses API contact and — after its internal safety timeout (~60–90s) —
+resets `frc` from `1` (off) back to `0` (Neutral). In Neutral with a car plugged
+in, the charger **charges by default**. If the outage falls into an expensive
+hour, that means unwanted, costly charging — and HA is blind during the outage,
+unable to send a corrective `frc=1`.
+
+Three layers defend against this:
+
+1. **Access control (the real, outage-proof fix).** Toggle
+   `input_boolean.ev_require_authentication` ON. The scheduler then gates every
+   charge through the charger's access control (`trx` / "Laden freigeben"):
+   authorize (`trx=0`) to charge, deauthorize (`trx=null`) to stop. Because
+   `trx` is **persistent** (unlike `frc`), the last "don't charge" decision
+   survives the outage: Neutral + unauthorized = no charging, no matter how long
+   the link is down. The safe failure mode becomes "don't charge" instead of
+   "charge".
+
+   ⚠️ **One-time manual step:** enable access control in the **go-e app**
+   (Charger settings → Access control → "Authentication required"). There is no
+   HA entity for the `acs` setting, so it must be set once in the app. Until both
+   the app setting and the toggle are on, `trx` is never touched and behaviour is
+   identical to the frc-only model. Verify a normal charge still starts after
+   enabling, then trust it.
+
+2. **Offline alert.** `ev_charger_offline_alert` pushes a notification when HA
+   loses contact with the charger for >5 min while a car is plugged in, so you
+   can intervene (e.g. unplug) even if access control is off.
+   `ev_charger_back_online` confirms recovery.
+
+3. **FRC watchdog.** Re-asserts the correct `frc`/`trx` the instant the link
+   returns — now triggered both on `frc → 0` and on any reconnect from
+   `unavailable` (covers the charger coming back already charging).
+
 ## File Structure
 
 ```
@@ -285,6 +322,7 @@ They also enable the `--reload` / `--restart` flags, which only fire when the ge
 |---|---|
 | `binary_sensor.ev_car_connected_stable` | Debounced mirror of `binary_sensor.goe_*_car_0` with `delay_on`/`delay_off` = 1 min + `availability` gating. Notifications trigger on this, not the raw sensor. |
 | `sensor.ev_session_energy_last_known` | Last good `wh` reading while the car is plugged in. Survives transient WiFi outages so disconnect notifications don't show "Session: 0.0 kWh". |
+| `sensor.ev_car_plug_last_known` | Latches the last definite `on`/`off` plug state. Lets the offline alert know a car was plugged in even after every go-e entity went `unavailable`. |
 
 ### Cost & Energy Tracking
 
@@ -370,18 +408,27 @@ flowchart LR
     style notify_off fill:#1a5276,color:#fff
 ```
 
-### FRC Watchdog
+### FRC Watchdog & Offline Protection
 
-Protects against the go-eCharger resetting `frc` to Neutral after WiFi drops:
+Protects against the go-eCharger resetting `frc` to Neutral after WiFi/Powerline
+drops. The watchdog now also fires on any reconnect from `unavailable`, and a
+separate offline alert covers the window where HA has no contact at all. For the
+outage-proof safeguard (charger-side access control), see
+[Powerline Outage Hardening](#powerline-outage-hardening).
 
 ```mermaid
 flowchart LR
-    reset["frc → 0\n(charger safety reset)"] --> car{Car\nplugged in?}
+    reset["frc → 0 / reconnect\n(charger safety reset)"] --> car{Car\nplugged in?}
     car -- Yes --> rerun["🔄 Re-run scheduler\n(skip conditions)"]
-    car -- No --> ignore([Ignore \u2014 legitimate\ndisconnect reset])
+    car -- No --> ignore([Ignore — legitimate\ndisconnect reset])
+    offline["frc unavailable\n>5 min"] --> plugged{Car plugged in\n(last known)?}
+    plugged -- Yes --> warn["📡 Offline alert\n→ unplug / acs blocks"]
+    plugged -- No --> skip([Skip])
 
     style rerun fill:#b8860b,color:#fff
     style ignore fill:#555,color:#fff
+    style warn fill:#8b1a1a,color:#fff
+    style skip fill:#555,color:#fff
 ```
 
 ### Safety & Reminders
@@ -408,7 +455,9 @@ flowchart TD
 | ID | Trigger | Action |
 |---|---|---|
 | `ev_smart_charge_scheduler` | Every min + car connect + price change | Start/stop based on live price vs threshold + budget + SoC + voltage |
-| `ev_frc_watchdog` | `select.goe_*_frc` transitions to `0` | Re-runs scheduler when the go-eCharger auto-resets `frc` after a Powerline-induced API timeout, preventing unintended charging during Neutral-mode default behaviour |
+| `ev_frc_watchdog` | `select.goe_*_frc` to `0`, or any reconnect from `unavailable` | Re-runs the scheduler when the go-eCharger auto-resets `frc` after a Powerline-induced API timeout, or comes back online, preventing unintended charging during Neutral-mode default behaviour |
+| `ev_charger_offline_alert` | `select.goe_*_frc` `unavailable` for 5 min + car plugged in (last known) | Pushes a warning that HA lost control and the charger may be charging uncontrolled; sets the offline flag |
+| `ev_charger_back_online` | `select.goe_*_frc` reconnects + offline flag set | Clears the flag and confirms contact is restored |
 | `ev_force_charge_on/off` | Dashboard toggle | Manual override |
 | `ev_voltage_*` | Voltage thresholds | Warn → reduce → stop → restore |
 | `ev_car_connected` | Debounced car-plugged (stable for 1 min) | Notify with price + budget info |

@@ -29,6 +29,25 @@ input_boolean:
     name: "EV force charge override"
     icon: mdi:flash
 
+  # When ON, the scheduler additionally gates charging via the go-eCharger's
+  # access control (trx "Laden freigeben"): authorize (trx=0) to charge,
+  # deauthorize (trx=null) to stop. This is the outage-proof safeguard —
+  # see the FRC watchdog / offline-alert comments below. Requires access
+  # control to be enabled in the go-e app (acs = "authentication required");
+  # there is no HA entity for acs, so it must be set once in the app.
+  # Default OFF: until enabled, trx is never touched and behaviour is
+  # identical to the frc-only model.
+  ev_require_authentication:
+    name: "EV require authentication (outage-safe)"
+    icon: mdi:shield-lock
+
+  # Internal flag: set while the charger is offline long enough to warn,
+  # cleared when it comes back. Gates the "back online" notification so it
+  # only fires after a real outage, not on every brief Powerline flap.
+  ev_charger_offline_flagged:
+    name: "EV charger offline flagged (internal)"
+    icon: mdi:lan-disconnect
+
 # =============================================================================
 # INPUT NUMBERS — dashboard-adjustable parameters
 # =============================================================================
@@ -810,6 +829,25 @@ template:
         icon: mdi:battery-sync
         state: "{{ states('sensor.ix1_xdrive30_battery_hv_state_of_charge') | float(0) }}"
 
+  # --- Last-known car plug state: survives charger unavailability ---
+  # When the Powerline link drops, every go-e entity (incl. the car sensor)
+  # goes 'unavailable' simultaneously — so an offline-detection automation
+  # cannot read whether a car is plugged in at that moment. This trigger-based
+  # sensor latches the last definite on/off value, so the offline alert can
+  # still tell "a car was plugged in when we lost contact".
+  - triggers:
+      - trigger: state
+        entity_id: binary_sensor.goe_${GOE_SERIAL}_car_0
+        not_to:
+          - unknown
+          - unavailable
+          - none
+    sensor:
+      - name: "EV car plug last known"
+        unique_id: ev_car_plug_last_known
+        icon: mdi:ev-plug-type2
+        state: "{{ states('binary_sensor.goe_${GOE_SERIAL}_car_0') }}"
+
 # =============================================================================
 # INTEGRATION SENSOR — Riemann sum for accumulated EV cost
 # =============================================================================
@@ -1007,12 +1045,25 @@ automation:
             {{ states('select.goe_${GOE_SERIAL}_frc') }}
           budget_remaining: >-
             {{ (monthly_budget - monthly_ev_cost) | round(2) }}
+          auth_required: >-
+            {{ is_state('input_boolean.ev_require_authentication', 'on') }}
       - choose:
           # --- START charging: set frc=2 ---
           - conditions:
               - condition: template
                 value_template: "{{ should_charge and current_frc | int != 2 }}"
             sequence:
+              # Authorize first when access control is in use, so frc=2 is
+              # honoured by the charger (trx=0 = release via app).
+              - if:
+                  - condition: template
+                    value_template: "{{ auth_required }}"
+                then:
+                  - action: select.select_option
+                    target:
+                      entity_id: select.goe_${GOE_SERIAL}_trx
+                    data:
+                      option: "0"
               - action: select.select_option
                 target:
                   entity_id: select.goe_${GOE_SERIAL}_frc
@@ -1048,6 +1099,19 @@ automation:
               - condition: template
                 value_template: "{{ not should_charge and current_frc | int != 1 }}"
             sequence:
+              # Deauthorize first (trx=null). When access control is enabled
+              # this is the outage-proof safety state: if the Powerline drops
+              # and the charger resets frc to Neutral, an unauthorized charger
+              # will NOT charge. Set before the notify gates so it always runs.
+              - if:
+                  - condition: template
+                    value_template: "{{ auth_required }}"
+                then:
+                  - action: select.select_option
+                    target:
+                      entity_id: select.goe_${GOE_SERIAL}_trx
+                    data:
+                      option: "null"
               - action: select.select_option
                 target:
                   entity_id: select.goe_${GOE_SERIAL}_frc
@@ -1093,6 +1157,15 @@ automation:
         entity_id: binary_sensor.goe_${GOE_SERIAL}_car_0
         state: "on"
     actions:
+      - if:
+          - condition: template
+            value_template: "{{ is_state('input_boolean.ev_require_authentication', 'on') }}"
+        then:
+          - action: select.select_option
+            target:
+              entity_id: select.goe_${GOE_SERIAL}_trx
+            data:
+              option: "0"
       - action: select.select_option
         target:
           entity_id: select.goe_${GOE_SERIAL}_frc
@@ -1124,6 +1197,17 @@ automation:
           entity_id: select.goe_${GOE_SERIAL}_frc
         data:
           option: "0"
+      # Deauthorize so Neutral cannot auto-charge while smart scheduling
+      # decides the next state (outage-safe when access control is on).
+      - if:
+          - condition: template
+            value_template: "{{ is_state('input_boolean.ev_require_authentication', 'on') }}"
+        then:
+          - action: select.select_option
+            target:
+              entity_id: select.goe_${GOE_SERIAL}_trx
+            data:
+              option: "null"
       - action: notify.mobile_app_${IPHONE_DEVICE}
         data:
           title: "ℹ️ EV force charge OFF"
@@ -1203,6 +1287,17 @@ automation:
           entity_id: select.goe_${GOE_SERIAL}_frc
         data:
           option: "1"
+      # Deauthorize too, so the charger cannot resume on a frc reset after a
+      # Powerline drop during the voltage incident (outage-safe stop).
+      - if:
+          - condition: template
+            value_template: "{{ is_state('input_boolean.ev_require_authentication', 'on') }}"
+        then:
+          - action: select.select_option
+            target:
+              entity_id: select.goe_${GOE_SERIAL}_trx
+            data:
+              option: "null"
       - action: notify.mobile_app_${IPHONE_DEVICE}
         data:
           title: "🚨 EV: Charging STOPPED — critical voltage"
@@ -1280,6 +1375,18 @@ automation:
           entity_id: select.goe_${GOE_SERIAL}_frc
         data:
           option: "0"
+      # Deauthorize so the next plug-in requires a fresh HA authorization.
+      # Without this, a lingering trx=0 would let the charger start on its
+      # own if the car is re-plugged while the Powerline link is down.
+      - if:
+          - condition: template
+            value_template: "{{ is_state('input_boolean.ev_require_authentication', 'on') }}"
+        then:
+          - action: select.select_option
+            target:
+              entity_id: select.goe_${GOE_SERIAL}_trx
+            data:
+              option: "null"
       - action: input_boolean.turn_off
         target:
           entity_id: input_boolean.ev_force_charge
@@ -1327,6 +1434,18 @@ automation:
       - trigger: state
         entity_id: select.goe_${GOE_SERIAL}_frc
         to: "0"
+      # Also re-assert on any reconnect after the charger was unreachable
+      # (Powerline outage). On reconnect frc may come back as 0 (Neutral,
+      # already covered) but also as 2 if the charger auto-started on its
+      # default — catch every unavailable -> real-state transition and let
+      # the scheduler restore the correct frc/trx immediately.
+      - trigger: state
+        entity_id: select.goe_${GOE_SERIAL}_frc
+        from: "unavailable"
+        not_to:
+          - unknown
+          - unavailable
+          - none
     conditions:
       # Only care about resets while a car is actually plugged in.
       # When the car is unplugged, ev_car_disconnected legitimately sets frc=0.
@@ -1342,6 +1461,86 @@ automation:
         data:
           skip_condition: true
     mode: restart
+
+  # -------------------------------------------------------------------------
+  # OFFLINE ALERT: HA has lost control of the charger
+  # -------------------------------------------------------------------------
+  # When the Powerline route to the garage is truly down (not just a brief
+  # flap), every go-e entity goes 'unavailable' and HA can no longer send
+  # frc/trx. In the default frc-only model the charger falls back to Neutral
+  # after its safety timeout and may charge uncontrolled — possibly during an
+  # expensive hour. HA cannot stop it remotely, so the best it can do is warn
+  # you to intervene (e.g. unplug). The real fix is access control + the
+  # ev_require_authentication toggle (see README).
+  #
+  # Gated on the last-known plug state (the live car sensor is also offline).
+  # A separate flag arms the "back online" notification so it only fires
+  # after a real >5 min outage, not on every reconnect.
+  - id: ev_charger_offline_alert
+    alias: "EV: Charger offline alert"
+    description: >-
+      Warns when HA loses contact with the go-eCharger for >5 min while a car
+      is plugged in — during an outage the charger may charge uncontrolled and
+      HA cannot stop it. Enable ev_require_authentication for an outage-proof
+      safeguard.
+    triggers:
+      - trigger: state
+        entity_id: select.goe_${GOE_SERIAL}_frc
+        to: "unavailable"
+        for:
+          minutes: 5
+    conditions:
+      - condition: state
+        entity_id: sensor.ev_car_plug_last_known
+        state: "on"
+    actions:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.ev_charger_offline_flagged
+      - action: notify.mobile_app_${IPHONE_DEVICE}
+        data:
+          title: "📡 EV charger offline — uncontrolled charging risk"
+          message: >-
+            Lost contact with the go-eCharger for >5 min while the car is
+            plugged in. HA can't stop it — in Neutral mode it may be charging.
+            Current price: {{ states('sensor.electricity_price_${TIBBER_HOME}') | float(0) | round(3) }} EUR/kWh.
+            {% if is_state('input_boolean.ev_require_authentication', 'on') %}Access control is ON — charging should stay blocked.{% else %}Consider unplugging until the link is back.{% endif %}
+          data:
+            push:
+              sound: "default"
+              interruption-level: "time-sensitive"
+    mode: single
+
+  - id: ev_charger_back_online
+    alias: "EV: Charger back online"
+    description: >-
+      Clears the offline flag and notifies once contact is restored, but only
+      if an outage was actually flagged (avoids noise on brief flaps).
+    triggers:
+      - trigger: state
+        entity_id: select.goe_${GOE_SERIAL}_frc
+        from: "unavailable"
+        not_to:
+          - unknown
+          - unavailable
+          - none
+        for:
+          seconds: 10
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ev_charger_offline_flagged
+        state: "on"
+    actions:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.ev_charger_offline_flagged
+      - action: notify.mobile_app_${IPHONE_DEVICE}
+        data:
+          title: "📡 EV charger back online"
+          message: >-
+            Contact restored (frc={{ states('select.goe_${GOE_SERIAL}_frc') }}).
+            The scheduler is re-asserting the correct charge state.
+    mode: single
 
   # -------------------------------------------------------------------------
   # SAFETY: reset frc to neutral on HA start
